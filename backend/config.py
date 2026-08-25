@@ -78,8 +78,27 @@ EVIDENCE_LOCAL_DIR: Path = _ROOT / os.getenv("EVIDENCE_LOCAL_DIR", "evidence_loc
 
 # ─── Decision engine ───────────────────────────────────────────────────────
 EVENT_COOLDOWN_SECONDS: float = _float("EVENT_COOLDOWN_SECONDS", 10.0)
+
+# PERSON_CONFIRMATION_FRAMES: a human candidate must appear in N consecutive
+# valid frames (same track, inside zone, stable bbox) before an alarm fires.
+# Set to 4 to reject single-frame false positives.
+# Override with env var PERSON_CONFIRMATION_FRAMES.
+PERSON_CONFIRMATION_FRAMES: int = _int("PERSON_CONFIRMATION_FRAMES", 4)
+
+# TEMPORAL_MIN_FRAMES: applies to non-person classes (animals, vehicles).
 TEMPORAL_MIN_FRAMES: int = _int("TEMPORAL_MIN_FRAMES", 3)
-TEMPORAL_WINDOW_SECONDS: float = _float("TEMPORAL_WINDOW_SECONDS", 1.0)
+
+TEMPORAL_WINDOW_SECONDS: float = _float("TEMPORAL_WINDOW_SECONDS", 2.0)
+
+# ─── Bounding-box stability (person temporal confirmation) ─────────────────
+# Max allowed jump in normalised center coordinates between frames.
+# 0.20 = 20% of frame width/height. Larger jumps reset the confirmation counter.
+# Guards against flickering/misidentification while allowing natural walking.
+BBOX_STABILITY_MAX_CENTER_JUMP: float = _float("BBOX_STABILITY_MAX_CENTER_JUMP", 0.25)
+
+# Max ratio between consecutive bbox widths or heights before reset.
+# 3.0 means the box may triple or shrink to 1/3 before being considered unstable.
+BBOX_STABILITY_MAX_SIZE_RATIO: float = _float("BBOX_STABILITY_MAX_SIZE_RATIO", 3.0)
 
 # ─── Sensor fusion weights ─────────────────────────────────────────────────
 FUSION_WEIGHT_VISION: float = _float("FUSION_WEIGHT_VISION", 0.55)

@@ -72,6 +72,9 @@ decision_engine = DecisionEngine(
     window_seconds=cfg.TEMPORAL_WINDOW_SECONDS,
     cooldown_seconds=cfg.EVENT_COOLDOWN_SECONDS,
     human_high_confidence=cfg.YOLO_HUMAN_HIGH_CONFIDENCE,
+    person_confirmation_frames=cfg.PERSON_CONFIRMATION_FRAMES,
+    bbox_max_center_jump=cfg.BBOX_STABILITY_MAX_CENTER_JUMP,
+    bbox_max_size_ratio=cfg.BBOX_STABILITY_MAX_SIZE_RATIO,
 )
 sensor_provider = SimulatedSensorProvider()
 esp32_client = ESP32Client()
@@ -305,7 +308,10 @@ async def _processing_loop():
                 )
                 fusion_out = fusion_engine.compute(fusion_in)
 
-                # Decision
+                # Decision — pass bbox_norm for stability check
+                logger.debug(
+                    f"[ZONE] track={det.track_id} class={det.class_name} INSIDE zone={zone_id}"
+                )
                 decision_out = decision_engine.process(
                     track_id=det.track_id,
                     zone_id=zone_id,
@@ -314,6 +320,7 @@ async def _processing_loop():
                     fused_score=fusion_out.fused_score,
                     is_confirmed_fused=fusion_out.is_confirmed,
                     decision_label=fusion_out.decision_label,
+                    bbox_norm=det.bbox_norm,
                 )
 
                 if decision_out.should_alarm or decision_out.is_critical:
@@ -321,10 +328,15 @@ async def _processing_loop():
 
                     # Build human-readable trigger source label
                     trigger_sources = ["YOLO-VISION"]
+                    if sensor_state.radar_triggered:
+                        trigger_sources.append("RADAR-SIM")
                     if ground_active:
                         trigger_sources.append("GROUND-SENSOR")
                     trigger_label = " + ".join(trigger_sources)
                     event_reason = f"{fusion_out.decision_label} [{trigger_label}]"
+
+                    logger.info(f"[FUSION] score={fusion_out.fused_score:.3f} label={fusion_out.decision_label}")
+                    logger.info(f"[EVENT] CREATING track={det.track_id} zone={zone_id} reason={event_reason}")
 
                     # Create event
                     if decision_out.should_create_event:
@@ -340,12 +352,16 @@ async def _processing_loop():
                                 **fusion_out.evidence,
                                 "trigger_source": trigger_label,
                                 "ground_active": ground_active,
+                                "radar_active": sensor_state.radar_triggered,
+                                "person_confirm_count": decision_out.person_confirm_count,
+                                "person_confirm_required": decision_out.person_confirm_required,
                             },
                         )
-                        # Trigger ESP32 buzzer (non-blocking)
-                        if det.class_name == "person":
+                        logger.info(f"[EVENT] CREATED id={event.id if event else 'COOLDOWN'}")
+                        # Trigger ESP32 buzzer (non-blocking) — only for persons
+                        if det.class_name == "person" and event:
                             logger.info(
-                                f"[ESP32_REQUEST] alarm reason={event_reason} "
+                                f"[ESP32_REQUEST] ALARM active=true reason={event_reason} "
                                 f"esp32_online={esp32_client.status.online} "
                                 f"track={det.track_id} conf={det.confidence:.2f}"
                             )
@@ -353,16 +369,18 @@ async def _processing_loop():
                             future = loop.run_in_executor(
                                 None, esp32_client.trigger_alarm, event_reason
                             )
-                            # Fire-and-forget but schedule a log callback
+                            # Fire-and-forget but log the result
                             def _log_esp32_result(fut, reason=event_reason):
                                 try:
                                     ok = fut.result()
                                     if ok:
-                                        logger.info(f"[ESP32_RESPONSE] alarm ACK — reason={reason}")
+                                        logger.info(f"[ESP32_RESPONSE] 200 OK — reason={reason}")
+                                        logger.info(f"[BUZZER] ACTIVE")
                                     else:
-                                        logger.warning(f"[ESP32_RESPONSE] alarm FAILED — ESP32 offline or error")
+                                        logger.warning(f"[ESP32_RESPONSE] FAILED — ESP32 offline or error")
+                                        logger.warning(f"[BUZZER] NOT ACTIVATED — hardware unavailable")
                                 except Exception as exc:
-                                    logger.error(f"[ESP32_RESPONSE] alarm exception: {exc}")
+                                    logger.error(f"[ESP32_RESPONSE] exception: {exc}")
                             future.add_done_callback(_log_esp32_result)
                             # Start evidence capture
                             if decision_out.should_capture and raw_frame is not None:
@@ -373,32 +391,36 @@ async def _processing_loop():
 
             current_decision_label = new_label
 
-        # ── Continuous ESP32 Buzzer Control & Ground Sensor Hold ──────────────────────
+        # ── Continuous ESP32 Buzzer Sustain Control ──────────────────────────────────
+        # The decision engine fires the alarm when a person is CONFIRMED (4 frames).
+        # This loop sustains the buzzer while a confirmed alarm is still active,
+        # and turns it off when no more confirmed tracks are in ALARM_ACTIVE state.
+        # It does NOT bypass the decision engine — it only sustains an already-fired alarm.
         global _last_buzzer_pulse, _buzzer_active_state, _last_ground_trigger_time
-        any_person_in_zone = False
-        for det in current_detections:
-            if det.class_name == "person" and det.bbox_norm:
-                if (len(zone_engine.check_detection("person", det.bbox_norm)) > 0 or 
-                    len(zone_engine.check_any_zone(det.bbox_norm)) > 0):
-                    any_person_in_zone = True
-                    break
 
         now_mono = time.monotonic()
+
+        # Sustain: any track in ALARM_ACTIVE state
+        any_alarm_active = any(
+            s["state"] in ("ALARM_ACTIVE", "EVIDENCE_CAPTURE", "EVENT_ACTIVE")
+            for s in decision_engine.get_all_states()
+        )
 
         # Update real ground sensor trigger hold time
         if ground_active:
             _last_ground_trigger_time = now_mono
 
-        ground_hold_active = (now_mono - _last_ground_trigger_time) < 2.0  # At least 2 sec hold
+        ground_hold_active = (now_mono - _last_ground_trigger_time) < 2.0
 
-        alarm_needed = any_person_in_zone or ground_hold_active
+        # Buzzer active if: decision engine confirmed alarm OR ground sensor active
+        alarm_needed = any_alarm_active or ground_hold_active
 
         if alarm_needed:
-            if not _buzzer_active_state or (now_mono - _last_buzzer_pulse >= 1.5):
+            if not _buzzer_active_state or (now_mono - _last_buzzer_pulse >= 2.0):
                 _last_buzzer_pulse = now_mono
                 _buzzer_active_state = True
                 if esp32_client.status.online:
-                    reason = "GROUND_SENSOR" if ground_hold_active else "VISION_INTRUSION"
+                    reason = "GROUND_SENSOR_ACTIVE" if ground_hold_active and not any_alarm_active else "VISION_CONFIRMED_INTRUSION"
                     loop = asyncio.get_running_loop()
                     loop.run_in_executor(None, esp32_client.trigger_alarm, reason, 2500)
         else:
@@ -448,6 +470,8 @@ async def _processing_loop():
             "zones": zone_engine.to_frontend_list(),
             "decision_state": current_decision_label,
             "sensor_state": sensor_state_dict,
+            "temporal_states": decision_engine.get_all_states(),
+            "buzzer_active": _buzzer_active_state,
             "camera_status": {
                 "online": camera.status.online,
                 "fps": round(camera.status.fps, 1),

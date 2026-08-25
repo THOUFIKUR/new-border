@@ -106,7 +106,65 @@ export default function Analytics() {
         </Card>
       </div>
 
-      {/* False positive rate */}
+      {/* False alarm metrics */}
+      <Card>
+        <div className="text-xs text-bp-muted uppercase tracking-widest mb-3">False-Alarm Resilience Metrics</div>
+        {(() => {
+          const total          = data?.total_events ?? 0;
+          const falsePos       = data?.false_positives ?? 0;
+          // confirmed = total - false positives (resolved/acknowledged treated as genuine)
+          const confirmed      = Math.max(0, total - falsePos);
+          const fpRate         = total > 0 ? (falsePos / total) * 100 : null;
+          const confirmRate    = total > 0 ? (confirmed / total) * 100 : null;
+          const insufficient   = total < 3;
+
+          return insufficient ? (
+            <div className="text-center py-6">
+              <div className="text-2xl mb-2 text-bp-muted">⊘</div>
+              <div className="text-sm text-bp-muted">Insufficient labeled events</div>
+              <div className="text-xs text-bp-dim mt-1">
+                Mark events as 'False Positive' or 'Resolve' to populate this section.
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div>
+                <div className="text-bp-muted text-xs mb-1">Total Events</div>
+                <div className="text-xl font-bold mono text-bp-text">{total}</div>
+              </div>
+              <div>
+                <div className="text-bp-muted text-xs mb-1">Confirmed Events</div>
+                <div className="text-xl font-bold mono text-bp-safe">{confirmed}</div>
+              </div>
+              <div>
+                <div className="text-bp-muted text-xs mb-1">False Positives</div>
+                <div className="text-xl font-bold mono text-bp-danger">{falsePos}</div>
+              </div>
+              <div>
+                <div className="text-bp-muted text-xs mb-1">FP Rate</div>
+                <div className={`text-xl font-bold mono ${fpRate > 20 ? 'text-bp-danger' : 'text-bp-safe'}`}>
+                  {fpRate !== null ? `${fpRate.toFixed(1)}%` : '—'}
+                </div>
+              </div>
+              <div className="col-span-2 md:col-span-4">
+                <div className="text-bp-muted text-xs mb-1">Confirmed-Event Rate</div>
+                <div className="h-2 bg-bp-border rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-bp-safe transition-all"
+                    style={{ width: confirmRate !== null ? `${confirmRate}%` : '0%' }}
+                  />
+                </div>
+                <div className="text-xs text-bp-muted mt-1">{confirmRate !== null ? `${confirmRate.toFixed(1)}% of events were genuine` : '—'}</div>
+              </div>
+            </div>
+          );
+        })()}
+        <div className="mt-3 text-xs text-bp-muted">
+          Based on operator-labelled resolutions. Rates improve as more events are reviewed.
+        </div>
+      </Card>
+
+      {/* Detection Quality (existing) */}
       <Card>
         <div className="text-xs text-bp-muted uppercase tracking-widest mb-3">Detection Quality</div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">

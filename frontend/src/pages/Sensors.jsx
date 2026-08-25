@@ -10,9 +10,11 @@ export default function Sensors() {
   const [simGround, setSimGround] = useState(false);
   const [loading,   setLoading]   = useState(false);
 
-  const sensors = streamData?.sensor_state;
-  const radar   = sensors?.radar  ?? {};
-  const ground  = sensors?.ground ?? {};
+  const sensors    = streamData?.sensor_state;
+  const radar      = sensors?.radar  ?? {};
+  const ground     = sensors?.ground ?? {};
+  const esp32      = streamData?.esp32_status ?? {};
+  const esp32Online = esp32.online ?? false;
 
   const toggle = async (type, val) => {
     setLoading(true);
@@ -35,9 +37,11 @@ export default function Sensors() {
 
       {/* Simulation warning */}
       <div className="bg-yellow-900/20 border border-yellow-700/40 rounded-lg p-4 text-yellow-400 text-sm">
-        <div className="font-semibold mb-1">⚠ Sensor Simulation Active</div>
-        Radar and ground sensors are software-simulated. When real hardware is wired and verified,
-        the backend will switch to REAL mode automatically. The UI will reflect the hardware mode.
+        <div className="font-semibold mb-1">⚠ Sensor Status</div>
+        <ul className="space-y-0.5 text-xs">
+          <li>• <strong>Radar:</strong> NOT CONNECTED — software simulated only</li>
+          <li>• <strong>Ground Sensor:</strong> {esp32Online ? '🟢 REAL HARDWARE — GPIO26 on ESP32' : '🟡 SIMULATED — ESP32 offline'}</li>
+        </ul>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -68,7 +72,7 @@ export default function Sensors() {
           <div className="text-xs text-bp-muted mb-4">
             Provides motion/presence evidence only. Not a human classifier.
           </div>
-          {/* Simulation toggle */}
+          {/* Simulation toggle for radar */}
           <div className="flex items-center justify-between p-3 bg-black/30 rounded border border-bp-border">
             <span className="text-sm text-bp-dim">Simulate Trigger</span>
             <button
@@ -79,7 +83,7 @@ export default function Sensors() {
               <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${simRadar ? 'translate-x-6' : 'translate-x-1'}`} />
             </button>
           </div>
-          <div className="text-xs text-yellow-600/60 mt-2">Physical wiring NOT YET CONFIGURED</div>
+          <div className="text-xs text-yellow-500/80 mt-2 font-semibold">NOT CONNECTED — software simulation only</div>
         </Card>
 
         {/* Ground */}
@@ -94,17 +98,28 @@ export default function Sensors() {
           <div className="text-xs text-bp-muted mb-4">
             Provides physical disturbance evidence only. Not a human/animal classifier.
           </div>
-          <div className="flex items-center justify-between p-3 bg-black/30 rounded border border-bp-border">
-            <span className="text-sm text-bp-dim">Simulate Trigger</span>
-            <button
-              onClick={() => toggle('ground', !simGround)}
-              disabled={loading}
-              className={`w-11 h-6 rounded-full transition-colors relative ${simGround ? 'bg-red-500' : 'bg-bp-border'}`}
-            >
-              <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${simGround ? 'translate-x-6' : 'translate-x-1'}`} />
-            </button>
-          </div>
-          <div className="text-xs text-yellow-600/60 mt-2">Physical wiring NOT YET CONFIGURED</div>
+          {/* Ground sensor — real hardware when ESP32 online */}
+          {esp32Online ? (
+            <div className="p-3 bg-green-900/20 rounded border border-green-700/40 text-xs">
+              <div className="text-green-400 font-semibold mb-1">🟢 REAL HARDWARE CONNECTED</div>
+              <div className="text-bp-muted">GPIO26 on ESP32 — Active-HIGH logic</div>
+              <div className="text-bp-muted mt-0.5">Serial: [GROUND] GPIO26 RAW=1 | TRIGGERED=YES</div>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between p-3 bg-black/30 rounded border border-bp-border">
+                <span className="text-sm text-bp-dim">Simulate Trigger</span>
+                <button
+                  onClick={() => toggle('ground', !simGround)}
+                  disabled={loading}
+                  className={`w-11 h-6 rounded-full transition-colors relative ${simGround ? 'bg-red-500' : 'bg-bp-border'}`}
+                >
+                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${simGround ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              <div className="text-xs text-yellow-500/80 mt-2">ESP32 offline — using simulation. Connect ESP32 for real GPIO26 reading.</div>
+            </>
+          )}
         </Card>
 
         {/* Temporal */}
