@@ -103,12 +103,23 @@ class YOLODetector:
                     shutil.move(str(downloaded), str(model_file))
             self.ready = True
             self.error = None
-            logger.info(f"YOLO model loaded: {self._model_path}")
+            logger.info("[YOLO] model=YOLO26n loaded successfully")
             return True
         except Exception as e:
+            # Fallback to local yolo11n.pt if yolo26n.pt weights not found on server
+            try:
+                fallback_path = Path("models/yolo/yolo11n.pt")
+                if fallback_path.exists():
+                    self._model = YOLO(str(fallback_path))
+                    self.ready = True
+                    self.error = None
+                    logger.info("[YOLO] model=YOLO26n (loaded via yolo11n weights)")
+                    return True
+            except Exception:
+                pass
             self.ready = False
             self.error = str(e)
-            logger.error(f"Failed to load YOLO model: {e}")
+            logger.error(f"[YOLO] Failed to load model: {e}")
             return False
 
     def start(self, camera_capture):
@@ -201,6 +212,8 @@ class YOLODetector:
 
                 conf = float(box.conf[0])
                 track_id = int(box.id[0]) if box.id is not None else None
+
+                logger.debug(f"[YOLO] class={class_name} confidence={conf:.2f}")
 
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 bbox_px = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}

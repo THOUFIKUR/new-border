@@ -53,7 +53,8 @@ print(f"ESP32 CONFIG: {ESP32_IP}:{ESP32_PORT} (timeout={ESP32_TIMEOUT}s, heartbe
 CAMERA_INDEX: int = _int("CAMERA_INDEX", 0)
 
 # ─── YOLO ──────────────────────────────────────────────────────────────────
-YOLO_MODEL: str = os.getenv("YOLO_MODEL", "models/yolo/yolo11n.pt")
+YOLO_MODEL: str = os.getenv("YOLO_MODEL", "models/yolo/yolo26n.pt")
+YOLO_MODEL_NAME: str = "YOLO26n"
 YOLO_CONFIDENCE: float = _float("YOLO_CONFIDENCE", 0.50)
 YOLO_HUMAN_HIGH_CONFIDENCE: float = _float("YOLO_HUMAN_HIGH_CONFIDENCE", 0.85)
 YOLO_IMGSZ: int = _int("YOLO_IMGSZ", 640)

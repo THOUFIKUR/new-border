@@ -4,19 +4,20 @@ export default {
   theme: {
     extend: {
       colors: {
-        // BorderPulse dark security ops palette
+        // BorderPulse dark command-center SOC palette
         bp: {
-          bg:       "#080d1a",
-          surface:  "#0d1525",
-          card:     "#111d2e",
-          border:   "#1a2d47",
-          accent:   "#00d4ff",
-          danger:   "#ff3a3a",
-          warning:  "#ffaa00",
-          safe:     "#00ff88",
-          muted:    "#6b7fa3",
-          text:     "#e2e8f0",
-          dim:      "#94a3b8",
+          bg:       "#060A0C",
+          surface:  "#0A1014",
+          card:     "#0E161B",
+          border:   "#15222B",
+          accent:   "#00E5FF",
+          green:    "#00FF66",
+          danger:   "#FF2A2A",
+          warning:  "#FFB700",
+          safe:     "#00FF66",
+          muted:    "#526673",
+          text:     "#E6F1F5",
+          dim:      "#8A9EA8",
         },
       },
       fontFamily: {
