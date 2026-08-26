@@ -51,6 +51,8 @@ print(f"ESP32 CONFIG: {ESP32_IP}:{ESP32_PORT} (timeout={ESP32_TIMEOUT}s, heartbe
 
 # ─── Camera ────────────────────────────────────────────────────────────────
 CAMERA_INDEX: int = _int("CAMERA_INDEX", 0)
+CAMERA_INDEX_2: int = _int("CAMERA_INDEX_2", 1)
+CAMERA_ALLOW_MIRROR_FALLBACK: bool = _bool("CAMERA_ALLOW_MIRROR_FALLBACK", True)
 
 # ─── YOLO ──────────────────────────────────────────────────────────────────
 YOLO_MODEL: str = os.getenv("YOLO_MODEL", "models/yolo/yolo26n.pt")

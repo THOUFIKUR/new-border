@@ -1,12 +1,13 @@
 // BorderPulse — Live Camera Feed with detection overlays
 import { useStream } from '../contexts/StreamContext';
 
-export default function CameraFeed({ className = '', showOverlay = true }) {
+export default function CameraFeed({ className = '', showOverlay = true, camId = 'cam_01' }) {
   const { streamData, connected } = useStream();
 
-  const frame    = streamData?.frame;
-  const cam      = streamData?.camera_status;
-  const fps      = streamData?.camera_status?.fps ?? 0;
+  const camData  = streamData?.cameras?.[camId];
+  const frame    = camData?.frame || streamData?.frame;
+  const cam      = camData || streamData?.camera_status;
+  const fps      = cam?.fps ?? streamData?.camera_status?.fps ?? 0;
   const latency  = streamData?.inference_latency_ms ?? 0;
   const decision = streamData?.decision_state ?? '';
 

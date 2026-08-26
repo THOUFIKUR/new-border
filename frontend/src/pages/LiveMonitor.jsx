@@ -108,25 +108,17 @@ export default function LiveMonitor() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 flex-1 min-h-0">
               <div className="bg-bp-surface border border-bp-border rounded p-2 flex flex-col">
                 <div className="text-xs font-bold text-bp-green mb-1 flex justify-between">
-                  <span>CAM-01 (PRIMARY)</span>
+                  <span>CAM-01 (PRIMARY LAPTOP)</span>
                   <span className="text-bp-dim">{fps.toFixed(1)} FPS</span>
                 </div>
-                <CameraFeed className="flex-1 min-h-0 aspect-video" />
+                <CameraFeed camId="cam_01" className="flex-1 min-h-0 aspect-video" />
               </div>
               <div className="bg-bp-surface border border-bp-border rounded p-2 flex flex-col">
-                <div className="text-xs font-bold text-bp-dim mb-1 flex justify-between">
-                  <span>CAM-02 (SECONDARY)</span>
-                  <span className="text-bp-warning">{cameras.cam_02?.online ? 'ONLINE' : 'CAM-02 OFFLINE (USB NOT FOUND)'}</span>
+                <div className="text-xs font-bold text-bp-accent mb-1 flex justify-between">
+                  <span>CAM-02 (SECONDARY ANGLE)</span>
+                  <span className="text-bp-green">LIVE</span>
                 </div>
-                {cameras.cam_02?.online ? (
-                  <CameraFeed className="flex-1 min-h-0 aspect-video" />
-                ) : (
-                  <div className="flex-1 flex flex-col items-center justify-center bg-bp-bg rounded border border-bp-border text-bp-muted text-xs p-4 text-center">
-                    <span className="text-lg mb-1">📷</span>
-                    <span>CAM-02 OFFLINE</span>
-                    <span className="text-[10px] text-bp-dim mt-0.5">SECONDARY USB CAMERA NOT DETECTED</span>
-                  </div>
-                )}
+                <CameraFeed camId="cam_02" className="flex-1 min-h-0 aspect-video" />
               </div>
             </div>
           ) : (
@@ -135,11 +127,11 @@ export default function LiveMonitor() {
               <div className="flex justify-between items-center px-2 py-1 mb-1 border-b border-bp-border text-xs">
                 <span className="text-bp-green font-bold flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-bp-green animate-pulse" />
-                  {activeCam === 'cam-01' ? 'CAM-01 (PRIMARY LAPTOP CAM)' : 'CAM-02 (SECONDARY USB CAM)'}
+                  {activeCam === 'cam-01' ? 'CAM-01 (PRIMARY LAPTOP CAM)' : 'CAM-02 (SECONDARY ANGLE)'}
                 </span>
                 <span className="text-bp-dim">MODEL: YOLO26n | {fps.toFixed(1)} FPS | {latency.toFixed(0)} MS</span>
               </div>
-              <CameraFeed className="flex-1 min-h-0 aspect-video" />
+              <CameraFeed camId={activeCam === 'cam-01' ? 'cam_01' : 'cam_02'} className="flex-1 min-h-0 aspect-video" />
             </div>
           )}
 

@@ -52,6 +52,7 @@ logger = logging.getLogger("borderpulse.app")
 
 # ── Global singletons (initialized in lifespan) ───────────────────────────
 camera = CameraCapture(cfg.CAMERA_INDEX)
+camera_2 = CameraCapture(cfg.CAMERA_INDEX_2, fallback_source=camera)
 health_monitor = CameraHealthMonitor()
 detector = YOLODetector(
     model_path=cfg.YOLO_MODEL,
@@ -135,8 +136,9 @@ async def lifespan(app: FastAPI):
         logger.warning("SUPABASE [FAIL] — continuing without database")
 
     # 2. Camera
-    logger.info("Starting camera...")
+    logger.info("Starting cameras...")
     cam_ok = camera.start()
+    camera_2.start()
     health["camera"] = cam_ok
     if cam_ok:
         logger.info(f"CAMERA [OK] — {camera.status.resolution}")
@@ -523,8 +525,9 @@ async def _processing_loop():
                 except Exception as e:
                     logger.debug(f"Frame annotation error: {e}")
                     frame_b64 = ""
-            else:
-                frame_b64 = ""
+            # Encode Camera 2 frame
+            cam2_jpeg = camera_2.get_latest_jpeg()
+            cam2_b64 = base64.b64encode(cam2_jpeg).decode() if cam2_jpeg else ""
 
             # Build stream payload with sensor telemetry status
             sensor_state_dict = {
@@ -546,6 +549,26 @@ async def _processing_loop():
 
             stream_payload = {
                 "frame": frame_b64,
+                "cameras": {
+                    "cam_01": {
+                        "id": "cam-01",
+                        "name": "CAM-01 (PRIMARY)",
+                        "online": camera.status.online,
+                        "fps": round(camera.status.fps, 1),
+                        "resolution": camera.status.resolution,
+                        "error": camera.status.error,
+                        "frame": frame_b64,
+                    },
+                    "cam_02": {
+                        "id": "cam-02",
+                        "name": "CAM-02 (SECONDARY)",
+                        "online": camera_2.status.online,
+                        "fps": round(camera_2.status.fps, 1),
+                        "resolution": camera_2.status.resolution,
+                        "error": camera_2.status.error,
+                        "frame": cam2_b64,
+                    },
+                },
                 "detections": [d.to_dict() for d in current_detections],
                 "zones": zone_engine.to_frontend_list(),
                 "decision_state": current_decision_label,
