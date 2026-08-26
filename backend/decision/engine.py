@@ -73,6 +73,7 @@ class BBoxSnapshot:
 class TrackState:
     track_id: Optional[int]
     zone_id: str
+    camera_id: str = "CAM-01"
     state: DetectionState = DetectionState.NO_DETECTION
     # Timestamps of valid confirmations in the current window
     frame_times: List[float] = field(default_factory=list)
@@ -229,7 +230,7 @@ class DecisionEngine:
                     ts.person_confirm_count = 0
                     ts.first_confirm_at = None
                     ts.feet_inside = False
-                    cleared.append(key)
+                    cleared.append((ts.track_id, ts.zone_id))
         return cleared
 
     # ── Main processing ───────────────────────────────────────────────────
@@ -247,15 +248,17 @@ class DecisionEngine:
         feet_inside: bool = True,
         radar_triggered: bool = False,
         ground_triggered: bool = False,
+        camera_id: str = "CAM-01",
     ) -> DecisionOutput:
 
-        key = (track_id, zone_id)
+        key = (camera_id, track_id, zone_id)
         now = time.monotonic()
 
         if key not in self._tracks:
             self._tracks[key] = TrackState(
                 track_id=track_id,
                 zone_id=zone_id,
+                camera_id=camera_id,
                 class_name=class_name,
             )
 
@@ -441,6 +444,7 @@ class DecisionEngine:
             {
                 "track_id": ts.track_id,
                 "zone_id": ts.zone_id,
+                "camera_id": ts.camera_id,
                 "state": ts.state.value,
                 "class_name": ts.class_name,
                 "peak_confidence": round(ts.peak_confidence, 3),

@@ -229,13 +229,18 @@ function ZoneCanvas({ zones, newPoints, onAddPoint, imgSrc, drawing }) {
 
 export default function Zones() {
   const { streamData } = useStream();
-  const [zones,     setZones]     = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [drawing,   setDrawing]   = useState(false);
-  const [newPoints, setNewPoints] = useState([]);
-  const [newName,   setNewName]   = useState('Restricted Zone 01');
+  const [selectedCam, setSelectedCam] = useState('CAM-01');
+  const [zones,       setZones]       = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [drawing,     setDrawing]     = useState(false);
+  const [newPoints,   setNewPoints]   = useState([]);
+  const [newName,     setNewName]     = useState('Restricted Zone 01');
 
-  const imgSrc = streamData?.frame ? `data:image/jpeg;base64,${streamData.frame}` : null;
+  const camKey = selectedCam === 'CAM-01' ? 'cam_01' : 'cam_02';
+  const rawB64 = streamData?.cameras?.[camKey]?.frame || (selectedCam === 'CAM-01' ? streamData?.frame : null);
+  const imgSrc = rawB64 ? `data:image/jpeg;base64,${rawB64}` : null;
+
+  const displayedZones = zones.filter(z => (z.camera_id || 'CAM-01') === selectedCam);
 
   const load = useCallback(async (showSpinner = false) => {
     if (showSpinner) setLoading(true);
@@ -268,7 +273,8 @@ export default function Zones() {
     if (newPoints.length < 3) { alert('Need at least 3 points'); return; }
     try {
       const created = await createZone({
-        name: newName,
+        name: `${selectedCam} - ${newName}`,
+        camera_id: selectedCam,
         polygon_points: newPoints,
         zone_type: 'restricted',
         enabled: true,
@@ -317,43 +323,65 @@ export default function Zones() {
       <div className="flex justify-between items-center pb-2 border-b border-bp-border">
         <div>
           <h1 className="text-lg font-bold text-bp-green tracking-wider uppercase font-sans">04 RESTRICTED ZONES</h1>
-          <p className="text-xs text-bp-muted">DRAW POLYGON BOUNDARIES. PERSON INTRUSION EVALUATES 9 BODY REPRESENTATIVE POINTS.</p>
+          <p className="text-xs text-bp-muted">DRAW CAMERA-SPECIFIC POLYGON BOUNDARIES. PERSON INTRUSION EVALUATES 9 BODY REPRESENTATIVE POINTS.</p>
         </div>
-        {drawing ? (
-          <div className="flex gap-2 items-center">
-            <input
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-              className="bg-bp-surface border border-bp-border rounded px-2 py-1 text-xs text-bp-text w-44 font-mono"
-              placeholder="Zone Name"
-            />
+        <div className="flex items-center gap-3">
+          {/* Camera Selector Tabs */}
+          <div className="flex bg-bp-surface border border-bp-border rounded p-0.5 text-xs">
             <button
-              onClick={saveZone}
-              disabled={newPoints.length < 3}
-              className="px-3 py-1 rounded text-xs font-bold bg-bp-green/20 border border-bp-green text-bp-green hover:bg-bp-green/30 disabled:opacity-50"
+              onClick={() => { setSelectedCam('CAM-01'); setDrawing(false); setNewPoints([]); }}
+              className={`px-3 py-1 rounded font-bold ${
+                selectedCam === 'CAM-01' ? 'bg-bp-green/20 text-bp-green border border-bp-green/40' : 'text-bp-dim'
+              }`}
             >
-              SAVE ({newPoints.length} PTS)
+              CAM-01 ZONES
             </button>
             <button
-              onClick={cancelDraw}
-              className="px-3 py-1 rounded text-xs font-bold bg-bp-surface border border-bp-border text-bp-dim hover:text-bp-text"
+              onClick={() => { setSelectedCam('CAM-02'); setDrawing(false); setNewPoints([]); }}
+              className={`px-3 py-1 rounded font-bold ${
+                selectedCam === 'CAM-02' ? 'bg-bp-accent/20 text-bp-accent border border-bp-accent/40' : 'text-bp-dim'
+              }`}
             >
-              CANCEL
+              CAM-02 ZONES
             </button>
           </div>
-        ) : (
-          <button
-            onClick={() => setDrawing(true)}
-            className="px-4 py-1.5 rounded text-xs font-bold bg-bp-green border border-bp-green text-black hover:bg-bp-green/90 shadow-[0_0_10px_rgba(0,255,102,0.2)]"
-          >
-            + DRAW RESTRICTED ZONE
-          </button>
-        )}
+
+          {drawing ? (
+            <div className="flex gap-2 items-center">
+              <input
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                className="bg-bp-surface border border-bp-border rounded px-2 py-1 text-xs text-bp-text w-44 font-mono"
+                placeholder="Zone Name"
+              />
+              <button
+                onClick={saveZone}
+                disabled={newPoints.length < 3}
+                className="px-3 py-1 rounded text-xs font-bold bg-bp-green/20 border border-bp-green text-bp-green hover:bg-bp-green/30 disabled:opacity-50"
+              >
+                SAVE ({newPoints.length} PTS)
+              </button>
+              <button
+                onClick={cancelDraw}
+                className="px-3 py-1 rounded text-xs font-bold bg-bp-surface border border-bp-border text-bp-dim hover:text-bp-text"
+              >
+                CANCEL
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setDrawing(true)}
+              className="px-4 py-1.5 rounded text-xs font-bold bg-bp-green border border-bp-green text-black hover:bg-bp-green/90 shadow-[0_0_10px_rgba(0,255,102,0.2)]"
+            >
+              + DRAW {selectedCam} ZONE
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Non-Blinking Zone Canvas Layer */}
       <ZoneCanvas
-        zones={zones}
+        zones={displayedZones}
         newPoints={newPoints}
         onAddPoint={addPoint}
         imgSrc={imgSrc}
@@ -362,7 +390,7 @@ export default function Zones() {
 
       {drawing && (
         <div className="text-xs text-bp-warning text-center font-mono">
-          Click on camera feed to add polygon vertices.
+          Click on {selectedCam} camera feed to add polygon vertices.
           {newPoints.length < 3 && ` Need ${3 - newPoints.length} more.`}
           {newPoints.length >= 3 && ' ✓ Click SAVE ZONE when finished.'}
         </div>
@@ -373,36 +401,36 @@ export default function Zones() {
         <div className="text-center py-6 text-xs text-bp-muted font-mono animate-pulse">Loading active zones...</div>
       ) : (
         <div className="space-y-2">
-          {zones.length === 0 && (
+          {displayedZones.length === 0 && (
             <div className="text-center py-8 text-xs text-bp-muted border border-bp-border rounded bg-bp-surface font-mono">
-              NO RESTRICTED ZONES CONFIGURED — CLICK '+ DRAW RESTRICTED ZONE' ABOVE
+              NO RESTRICTED ZONES CONFIGURED FOR {selectedCam} — CLICK '+ DRAW {selectedCam} ZONE' ABOVE
             </div>
           )}
-          {zones.map(z => (
+          {displayedZones.map(z => (
             <div key={z.id} className="p-3 bg-bp-surface border border-bp-border rounded flex items-center justify-between font-mono">
               <div className="flex items-center gap-3">
-                <span className={`w-2.5 h-2.5 rounded-full ${z.enabled ? 'bg-bp-green shadow-[0_0_6px_#00FF66]' : 'bg-bp-muted'}`} />
+                <span className={`w-2 h-2 rounded-full ${z.enabled ? 'bg-bp-green animate-pulse' : 'bg-bp-dim'}`} />
                 <div>
-                  <div className="text-xs font-bold text-bp-text tracking-wider">{z.name}</div>
-                  <div className="text-[11px] text-bp-dim">
-                    {z.polygon_points?.length || 0} POINTS · TYPE: {z.zone_type?.toUpperCase() || 'RESTRICTED'} · CLASS: {(z.alert_on_classes || ['person']).join(', ')}
+                  <div className="text-xs font-bold text-bp-text">{z.name}</div>
+                  <div className="text-[10px] text-bp-dim">
+                    CAMERA: {z.camera_id || 'CAM-01'} | TYPE: {z.zone_type?.toUpperCase()} | POINTS: {z.polygon_points?.length} | ALERT ON: {z.alert_on_classes?.join(', ')}
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => toggleZone(z)}
-                  className={`px-3 py-1 rounded text-[11px] font-bold border transition-all ${
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
                     z.enabled
-                      ? 'bg-bp-warning/10 border-bp-warning text-bp-warning hover:bg-bp-warning/20'
-                      : 'bg-bp-green/10 border-bp-green text-bp-green hover:bg-bp-green/20'
+                      ? 'bg-bp-green/10 text-bp-green border-bp-green/30 hover:bg-bp-green/20'
+                      : 'bg-bp-surface text-bp-dim border-bp-border hover:text-bp-text'
                   }`}
                 >
-                  {z.enabled ? 'DISABLE' : 'ENABLE'}
+                  {z.enabled ? 'ENABLED' : 'DISABLED'}
                 </button>
                 <button
                   onClick={() => removeZone(z.id)}
-                  className="px-3 py-1 rounded text-[11px] font-bold bg-bp-danger/10 border border-bp-danger text-bp-danger hover:bg-bp-danger/20"
+                  className="px-2 py-0.5 rounded text-[10px] font-bold bg-bp-danger/10 text-bp-danger border border-bp-danger/30 hover:bg-bp-danger/20"
                 >
                   DELETE
                 </button>

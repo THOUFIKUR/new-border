@@ -115,10 +115,20 @@ export default function LiveMonitor() {
               </div>
               <div className="bg-bp-surface border border-bp-border rounded p-2 flex flex-col">
                 <div className="text-xs font-bold text-bp-accent mb-1 flex justify-between">
-                  <span>CAM-02 (SECONDARY ANGLE)</span>
-                  <span className="text-bp-green">LIVE</span>
+                  <span>CAM-02 (SECONDARY USB)</span>
+                  <span className={cameras.cam_02?.online ? "text-bp-green" : "text-bp-warning"}>
+                    {cameras.cam_02?.online ? "LIVE" : "CAM-02 OFFLINE"}
+                  </span>
                 </div>
-                <CameraFeed camId="cam_02" className="flex-1 min-h-0 aspect-video" />
+                {cameras.cam_02?.online ? (
+                  <CameraFeed camId="cam_02" className="flex-1 min-h-0 aspect-video" />
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center bg-bp-bg rounded border border-bp-border text-bp-muted text-xs p-4 text-center">
+                    <span className="text-lg mb-1 text-bp-warning">📷</span>
+                    <span className="text-bp-warning font-bold">CAM-02 OFFLINE</span>
+                    <span className="text-[10px] text-bp-dim mt-0.5 font-mono">USB CAMERA NOT DETECTED</span>
+                  </div>
+                )}
               </div>
             </div>
           ) : (

@@ -179,11 +179,15 @@ class YOLODetector:
                 except queue.Empty:
                     pass
 
-            # Throttle to avoid pegging CPU/GPU
-            elapsed = time.monotonic() - t0
-            target_interval = 1.0 / 30  # max 30 Hz inference
-            if elapsed < target_interval:
-                time.sleep(target_interval - elapsed)
+    def predict(self, frame: np.ndarray) -> List[Detection]:
+        """Public thread-safe inference method for arbitrary camera frames."""
+        if not self.ready or self._model is None:
+            return []
+        try:
+            return self._run_inference(frame)
+        except Exception as e:
+            logger.error(f"[YOLO] Predict error: {e}")
+            return []
 
     def _run_inference(self, frame: np.ndarray) -> List[Detection]:
         results = self._model.track(

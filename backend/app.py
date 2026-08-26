@@ -51,8 +51,9 @@ logging.basicConfig(
 logger = logging.getLogger("borderpulse.app")
 
 # ── Global singletons (initialized in lifespan) ───────────────────────────
-camera = CameraCapture(cfg.CAMERA_INDEX)
-camera_2 = CameraCapture(cfg.CAMERA_INDEX_2, fallback_source=camera)
+camera_1 = CameraCapture(cfg.CAMERA_1_INDEX, camera_name="CAM-01")
+camera_2 = CameraCapture(cfg.CAMERA_2_INDEX, camera_name="CAM-02")
+camera = camera_1  # Primary alias for backward compatibility
 health_monitor = CameraHealthMonitor()
 detector = YOLODetector(
     model_path=cfg.YOLO_MODEL,
@@ -135,16 +136,24 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("SUPABASE [FAIL] — continuing without database")
 
-    # 2. Camera
+    # 2. Camera Hardware Detection & Startup
+    from backend.camera.capture import detect_available_cameras
+    detect_available_cameras(max_index=4)
+
     logger.info("Starting cameras...")
-    cam_ok = camera.start()
-    camera_2.start()
+    cam_ok = camera_1.start()
+    cam2_ok = camera_2.start()
     health["camera"] = cam_ok
     if cam_ok:
-        logger.info(f"CAMERA [OK] — {camera.status.resolution}")
+        logger.info(f"[CAMERA] CAM-01 started index={cfg.CAMERA_1_INDEX} resolution={camera_1.status.resolution}")
         time.sleep(0.5)  # Warm up
     else:
-        logger.error(f"CAMERA [FAIL] — {camera.status.error}")
+        logger.error(f"[CAMERA] CAM-01 index={cfg.CAMERA_1_INDEX} FAILED — {camera_1.status.error}")
+
+    if cam2_ok:
+        logger.info(f"[CAMERA] CAM-02 started index={cfg.CAMERA_2_INDEX} resolution={camera_2.status.resolution}")
+    else:
+        logger.info(f"[CAMERA] CAM-02 index={cfg.CAMERA_2_INDEX} FAILED — {camera_2.status.error}")
 
     # 3. YOLO
     logger.info("Loading YOLO model...")
@@ -346,9 +355,9 @@ async def _processing_loop():
                     if not det.bbox_norm:
                         continue
 
-                    # Zone check: PERSONS use ONLY bottom-center/feet point.
+                    # Zone check: PERSONS use ONLY bottom-center/feet point against CAM-01 zones.
                     triggered_zones = zone_engine.check_detection(
-                        det.class_name, det.bbox_norm, track_id=det.track_id
+                        det.class_name, det.bbox_norm, track_id=det.track_id, camera_id="CAM-01"
                     )
                     inside_zone = len(triggered_zones) > 0
                     zone_id = triggered_zones[0] if triggered_zones else "no-zone"
@@ -357,14 +366,9 @@ async def _processing_loop():
                     if det.class_name == "person":
                         fx, fy = _bbox_bottom_center(det.bbox_norm)
                         logger.debug(
-                            f"[ZONE] track={det.track_id} "
+                            f"[ZONE] CAM-01 track={det.track_id} "
                             f"feet=({fx:.3f},{fy:.3f}) inside={inside_zone}"
                         )
-                        if not inside_zone:
-                            logger.debug(
-                                f"[DECISION] PERSON_OUTSIDE_RESTRICTED_ZONE "
-                                f"track={det.track_id} — NO ALARM"
-                            )
 
                     # Fusion
                     fusion_in = FusionInput(
@@ -378,7 +382,7 @@ async def _processing_loop():
                     )
                     fusion_out = fusion_engine.compute(fusion_in)
 
-                    # Decision Engine evaluation
+                    # Decision Engine evaluation for CAM-01
                     decision_out = decision_engine.process(
                         track_id=det.track_id,
                         zone_id=zone_id,
@@ -391,6 +395,7 @@ async def _processing_loop():
                         feet_inside=inside_zone,
                         radar_triggered=radar_active,
                         ground_triggered=ground_active,
+                        camera_id="CAM-01",
                     )
 
                     # Populate annotator status for UI live visual debug
@@ -421,13 +426,11 @@ async def _processing_loop():
                             else "HUMAN_INTRUSION_SENSOR_CONFIRMED"
                         )
 
-                        # ── Person ALARM_ACTIVE event trigger ──
                         if decision_out.should_alarm and det.class_name == "person":
                             logger.info(
-                                f"[DECISION] ALARM_ACTIVE track={det.track_id} conf={det.confidence:.2f}"
+                                f"[DECISION] CAM-01 ALARM_ACTIVE track={det.track_id} conf={det.confidence:.2f}"
                             )
 
-                        # ── Event creation (DB audit, cooldown-gated, ONE per alarm) ──
                         event = None
                         if decision_out.should_create_event:
                             trigger_label = "HIGH-CONFIDENCE" if decision_out.is_critical else "YOLO + RADAR-SIM + GROUND-SENSOR"
@@ -457,7 +460,58 @@ async def _processing_loop():
 
                 current_decision_label = new_label
 
-            # ── Track Loss Check & Combined Alarm Arbitration ───────────────────
+            # ── Process CAM-02 Detections & Zones if CAM-02 is Online ──────────
+            cam2_b64 = ""
+            raw_2 = camera_2.get_latest_raw()
+            if camera_2.status.online and raw_2 is not None:
+                try:
+                    det2_list = detector.predict(raw_2)
+                    for det2 in det2_list:
+                        if not det2.bbox_norm:
+                            continue
+                        trig2 = zone_engine.check_detection(
+                            det2.class_name, det2.bbox_norm, track_id=det2.track_id, camera_id="CAM-02"
+                        )
+                        inside2 = len(trig2) > 0
+                        z_id2 = trig2[0] if trig2 else "no-zone"
+                        fusion_in2 = FusionInput(
+                            vision_confidence=det2.confidence,
+                            radar_triggered=radar_active,
+                            ground_triggered=ground_active,
+                            temporal_confirmed=False,
+                            class_name=det2.class_name,
+                            track_id=det2.track_id,
+                            inside_zone=inside2,
+                        )
+                        fusion_out2 = fusion_engine.compute(fusion_in2)
+                        dec2 = decision_engine.process(
+                            track_id=det2.track_id,
+                            zone_id=z_id2,
+                            class_name=det2.class_name,
+                            confidence=det2.confidence,
+                            fused_score=fusion_out2.fused_score,
+                            is_confirmed_fused=fusion_out2.is_confirmed,
+                            decision_label=fusion_out2.decision_label,
+                            bbox_norm=det2.bbox_norm,
+                            feet_inside=inside2,
+                            radar_triggered=radar_active,
+                            ground_triggered=ground_active,
+                            camera_id="CAM-02",
+                        )
+                        if dec2.should_alarm and det2.class_name == "person":
+                            logger.info(f"[DECISION] CAM-02 ALARM_ACTIVE track={det2.track_id} conf={det2.confidence:.2f}")
+
+                    annotated2 = annotate_frame(
+                        raw_2,
+                        det2_list,
+                        zone_engine.get_zones(camera_id="CAM-02"),
+                        current_decision_label,
+                        cfg.STREAM_JPEG_QUALITY,
+                    )
+                    cam2_b64 = base64.b64encode(annotated2).decode()
+                except Exception as e:
+                    logger.debug(f"CAM-02 processing error: {e}")
+                    cam2_b64 = ""
             decision_engine.check_track_loss()
 
             # Check if any track remains in an active YOLO alarm state
@@ -553,10 +607,10 @@ async def _processing_loop():
                     "cam_01": {
                         "id": "cam-01",
                         "name": "CAM-01 (PRIMARY)",
-                        "online": camera.status.online,
-                        "fps": round(camera.status.fps, 1),
-                        "resolution": camera.status.resolution,
-                        "error": camera.status.error,
+                        "online": camera_1.status.online,
+                        "fps": round(camera_1.status.fps, 1),
+                        "resolution": camera_1.status.resolution,
+                        "error": camera_1.status.error,
                         "frame": frame_b64,
                     },
                     "cam_02": {
@@ -565,7 +619,7 @@ async def _processing_loop():
                         "online": camera_2.status.online,
                         "fps": round(camera_2.status.fps, 1),
                         "resolution": camera_2.status.resolution,
-                        "error": camera_2.status.error,
+                        "error": camera_2.status.error or "USB CAMERA NOT DETECTED",
                         "frame": cam2_b64,
                     },
                 },

@@ -150,23 +150,25 @@ class ZoneEngine:
     def update_zone(self, zone: Zone):
         self._zones[zone.id] = zone
 
-    def get_zones(self) -> List[Zone]:
+    def get_zones(self, camera_id: Optional[str] = None) -> List[Zone]:
+        if camera_id:
+            return [z for z in self._zones.values() if not z.camera_id or z.camera_id == camera_id]
         return list(self._zones.values())
 
-    def check_detection(self, class_name: str, bbox_norm: dict, track_id: Optional[int] = None) -> List[str]:
+    def check_detection(self, class_name: str, bbox_norm: dict, track_id: Optional[int] = None, camera_id: Optional[str] = None) -> List[str]:
         """
         Check if a detection is inside any enabled zone.
+        Only evaluates zones matching the specified camera_id (or unassigned zones).
 
         PERSON CLASS: Inside if ANY of the 9 representative points is inside the polygon.
         ALL OTHER CLASSES: OR logic — bottom-center OR center OR top-center.
-
-        bbox_norm: {"x1", "y1", "x2", "y2"} in 0.0–1.0 normalized coordinates.
-        Returns list of zone IDs where the detection is inside.
         """
         px_b, py_b = bottom_center(bbox_norm)
         triggered = []
         for zone in self._zones.values():
             if not zone.enabled:
+                continue
+            if camera_id and zone.camera_id and zone.camera_id != camera_id:
                 continue
             if class_name not in zone.alert_on_classes:
                 continue
@@ -177,7 +179,6 @@ class ZoneEngine:
                 pts = representative_points(bbox_norm)
                 in_zone = any(_ray_cast_pip(px, py, zone.polygon_points) for px, py in pts)
             else:
-                # Non-persons: OR logic (bottom-center OR center OR top-center)
                 px_c, py_c = center_point(bbox_norm)
                 px_t, py_t = top_center(bbox_norm)
                 in_zone = (
@@ -187,21 +188,22 @@ class ZoneEngine:
                 )
 
             logger.debug(
-                f"[ZONE] track={track_id} representative_points=9 inside={in_zone}"
+                f"[ZONE] camera={camera_id} track={track_id} representative_points=9 inside={in_zone}"
             )
             if in_zone:
                 triggered.append(zone.id)
         return triggered
 
-    def check_any_zone(self, bbox_norm: dict, class_name: str = "unknown") -> List[str]:
+    def check_any_zone(self, bbox_norm: dict, class_name: str = "unknown", camera_id: Optional[str] = None) -> List[str]:
         """
-        Check against all enabled zones regardless of class filter.
-        PERSON: 9 representative points. All other classes: OR logic.
+        Check against all enabled zones matching camera_id regardless of class filter.
         """
         px_b, py_b = bottom_center(bbox_norm)
         triggered = []
         for zone in self._zones.values():
             if not zone.enabled or len(zone.polygon_points) < 3:
+                continue
+            if camera_id and zone.camera_id and zone.camera_id != camera_id:
                 continue
             if class_name == "person":
                 pts = representative_points(bbox_norm)
@@ -225,15 +227,17 @@ class ZoneEngine:
             return True
         return False
 
-    def to_frontend_list(self) -> List[dict]:
+    def to_frontend_list(self, camera_id: Optional[str] = None) -> List[dict]:
         return [
             {
                 "id": z.id,
                 "name": z.name,
+                "camera_id": z.camera_id or "CAM-01",
                 "enabled": z.enabled,
                 "zone_type": z.zone_type,
                 "polygon_points": [{"x": p.x, "y": p.y} for p in z.polygon_points],
                 "alert_on_classes": z.alert_on_classes,
             }
             for z in self._zones.values()
+            if not camera_id or not z.camera_id or z.camera_id == camera_id
         ]

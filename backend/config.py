@@ -50,9 +50,8 @@ ESP32_RETRY_DELAY: float = _float("ESP32_RETRY_DELAY", 1.0)
 print(f"ESP32 CONFIG: {ESP32_IP}:{ESP32_PORT} (timeout={ESP32_TIMEOUT}s, heartbeat={ESP32_HEARTBEAT_INTERVAL}s)")
 
 # ─── Camera ────────────────────────────────────────────────────────────────
-CAMERA_INDEX: int = _int("CAMERA_INDEX", 0)
-CAMERA_INDEX_2: int = _int("CAMERA_INDEX_2", 1)
-CAMERA_ALLOW_MIRROR_FALLBACK: bool = _bool("CAMERA_ALLOW_MIRROR_FALLBACK", True)
+CAMERA_1_INDEX: int = _int("CAMERA_1_INDEX", _int("CAMERA_INDEX", 0))
+CAMERA_2_INDEX: int = _int("CAMERA_2_INDEX", 1)
 
 # ─── YOLO ──────────────────────────────────────────────────────────────────
 YOLO_MODEL: str = os.getenv("YOLO_MODEL", "models/yolo/yolo26n.pt")
