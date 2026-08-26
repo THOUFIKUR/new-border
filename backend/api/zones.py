@@ -56,6 +56,8 @@ async def create_zone(body: ZoneCreateModel):
     zone_engine.add_zone(zone)
 
     # Persist to Supabase
+    db_persisted = False
+    db_error = None
     if db:
         try:
             row = {
@@ -68,11 +70,21 @@ async def create_zone(body: ZoneCreateModel):
                 "alert_on_classes": body.alert_on_classes,
             }
             db.table("zones").insert(row).execute()
+            db_persisted = True
         except Exception as e:
-            # Zone is still active locally even if DB write fails
-            pass
+            # P7 fix: log the exact error — do NOT silently swallow
+            import logging as _logging
+            _logging.getLogger("borderpulse.api.zones").warning(
+                f"[SUPABASE] Zone '{body.name}' ({zone_id}) DB persist FAILED: {e}"
+            )
+            db_error = str(e)
+            # Zone remains active locally; frontend receives the failure flag
 
-    return {"zone": zone_engine.to_frontend_list()[-1], "id": zone_id}
+    resp = {"zone": zone_engine.to_frontend_list()[-1], "id": zone_id, "db_persisted": db_persisted}
+    if db_error:
+        resp["db_warning"] = f"Zone saved locally only — Supabase write failed: {db_error}"
+    return resp
+
 
 
 @router.put("/zones/{zone_id}")

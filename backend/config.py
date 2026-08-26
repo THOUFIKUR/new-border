@@ -81,9 +81,15 @@ EVENT_COOLDOWN_SECONDS: float = _float("EVENT_COOLDOWN_SECONDS", 10.0)
 
 # PERSON_CONFIRMATION_FRAMES: a human candidate must appear in N consecutive
 # valid frames (same track, inside zone, stable bbox) before an alarm fires.
-# Set to 4 to reject single-frame false positives.
-# Override with env var PERSON_CONFIRMATION_FRAMES.
 PERSON_CONFIRMATION_FRAMES: int = _int("PERSON_CONFIRMATION_FRAMES", 4)
+# Minimum confirmation duration in seconds for normal path (prevents fast single-burst false alarms)
+PERSON_MIN_CONFIRM_SECONDS: float = _float("PERSON_MIN_CONFIRM_SECONDS", 0.5)
+
+# Short track-loss grace period before releasing active alarm (seconds)
+TRACK_LOSS_GRACE_SECONDS: float = _float("TRACK_LOSS_GRACE_SECONDS", 2.0)
+
+# Prototype simulation override for unconnected Radar hardware
+RADAR_SIMULATED_PROTOTYPE_STATE: bool = _bool("RADAR_SIMULATED_PROTOTYPE_STATE", True)
 
 # TEMPORAL_MIN_FRAMES: applies to non-person classes (animals, vehicles).
 TEMPORAL_MIN_FRAMES: int = _int("TEMPORAL_MIN_FRAMES", 3)

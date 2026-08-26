@@ -78,6 +78,8 @@ class TrackState:
     frame_times: List[float] = field(default_factory=list)
     # Running count of consecutive valid person confirmations
     person_confirm_count: int = 0
+    first_confirm_at: Optional[float] = None
+    feet_inside: bool = False
     state_entered_at: float = field(default_factory=time.monotonic)
     last_detection_at: float = field(default_factory=time.monotonic)
     event_id: Optional[str] = None
@@ -100,7 +102,8 @@ class DecisionOutput:
     state: DetectionState
     previous_state: DetectionState
     state_changed: bool
-    should_alarm: bool          # Trigger ESP32 buzzer
+    should_alarm: bool          # Trigger ESP32 buzzer (ONCE on transition)
+    should_stop_alarm: bool     # Stop ESP32 buzzer (ONCE on transition)
     should_create_event: bool   # Create new Supabase event
     should_capture: bool        # Start evidence capture
     is_critical: bool           # High-confidence fast-path intrusion
@@ -118,10 +121,12 @@ class DecisionEngine:
     Per-track temporal confirmation and alarm state machine.
     Designed to be sensor/camera agnostic — only receives structured inputs.
 
-    For persons: requires PERSON_CONFIRMATION_FRAMES consecutive valid
-    detections (same track, inside zone, stable bbox) before alarming.
-
-    For other classes: uses TEMPORAL_MIN_FRAMES with the existing multi-state path.
+    Two Alarm Paths for 'person' class:
+    1. Normal Path:
+       Person + Feet INSIDE Zone + 4 Consecutive Frames + ~0.5s duration + Radar ON + Ground ON => ALARM ACTIVE
+    2. High-Confidence Path:
+       Person + Feet INSIDE Zone + Confidence >= 0.85 => IMMEDIATE ALARM ACTIVE
+       (Bypasses radar, ground, and 4-frame wait, BUT NEVER bypasses feet-in-zone check).
     """
 
     def __init__(
@@ -131,6 +136,8 @@ class DecisionEngine:
         cooldown_seconds: float = 10.0,
         human_high_confidence: float = 0.85,
         person_confirmation_frames: int = 4,
+        person_min_confirm_seconds: float = cfg.PERSON_MIN_CONFIRM_SECONDS,
+        track_loss_grace_seconds: float = cfg.TRACK_LOSS_GRACE_SECONDS,
         bbox_max_center_jump: float = 0.25,
         bbox_max_size_ratio: float = 3.0,
     ):
@@ -139,6 +146,8 @@ class DecisionEngine:
         self.cooldown_seconds = cooldown_seconds
         self.human_high_confidence = human_high_confidence
         self.person_confirmation_frames = person_confirmation_frames
+        self.person_min_confirm_seconds = person_min_confirm_seconds
+        self.track_loss_grace_seconds = track_loss_grace_seconds
         self.bbox_max_center_jump = bbox_max_center_jump
         self.bbox_max_size_ratio = bbox_max_size_ratio
 
@@ -166,8 +175,6 @@ class DecisionEngine:
         """
         Return True if the new bounding box is consistent with recent history.
         A sudden large jump resets person temporal confirmation.
-
-        new_bbox: {"x1", "y1", "x2", "y2"} in normalised coords, or None.
         """
         if new_bbox is None:
             return True  # No bbox info — do not penalise
@@ -201,6 +208,30 @@ class DecisionEngine:
         ts.bbox_history.append(BBoxSnapshot(cx=cx, cy=cy, w=w, h=h))
         return True
 
+    # ── Track loss check ──────────────────────────────────────────────────
+
+    def check_track_loss(self, now: Optional[float] = None) -> List[Tuple[Optional[int], str]]:
+        """
+        Check active tracks for loss (no detections for > track_loss_grace_seconds).
+        Transitions lost alarm tracks to NO_DETECTION.
+        """
+        if now is None:
+            now = time.monotonic()
+        cleared = []
+        for key, ts in list(self._tracks.items()):
+            if ts.state == DetectionState.ALARM_ACTIVE:
+                if now - ts.last_detection_at > self.track_loss_grace_seconds:
+                    logger.info(
+                        f"[ALARM] PERSON LEFT RESTRICTED ZONE "
+                        f"(track={ts.track_id} lost for {now - ts.last_detection_at:.1f}s)"
+                    )
+                    ts.state = DetectionState.NO_DETECTION
+                    ts.person_confirm_count = 0
+                    ts.first_confirm_at = None
+                    ts.feet_inside = False
+                    cleared.append(key)
+        return cleared
+
     # ── Main processing ───────────────────────────────────────────────────
 
     def process(
@@ -213,6 +244,9 @@ class DecisionEngine:
         is_confirmed_fused: bool,
         decision_label: str,
         bbox_norm: Optional[dict] = None,
+        feet_inside: bool = True,
+        radar_triggered: bool = False,
+        ground_triggered: bool = False,
     ) -> DecisionOutput:
 
         key = (track_id, zone_id)
@@ -227,119 +261,111 @@ class DecisionEngine:
 
         ts = self._tracks[key]
         ts.last_detection_at = now
+        ts.feet_inside = feet_inside
         ts.peak_confidence = max(ts.peak_confidence, confidence)
         ts.frame_times.append(now)
         frames_in_window = ts.frames_in_window(self.window_seconds)
 
         prev_state = ts.state
         should_alarm = False
+        should_stop_alarm = False
         should_create_event = False
         should_capture = False
         is_critical = False
         person_confirm_count = 0
         person_confirm_required = self.person_confirmation_frames
 
-        # ── PERSON ALARM PATH ─────────────────────────────────────────────
-        # Persons must accumulate temporal confirmations.
-        # Only after PERSON_CONFIRMATION_FRAMES valid consecutive confirmations
-        # does the system declare a confirmed human intrusion and fire the alarm.
-        #
-        # Exception — HIGH-CONFIDENCE FAST PATH:
-        #   If confidence >= human_high_confidence (default 0.85) the operator
-        #   has a very strong visual signal. A single very confident detection
-        #   inside a restricted zone is alarmed immediately. This is documented
-        #   and intentional — at ≥0.85 the YOLO misdetection rate is very low.
-        #   The fast path still requires: class==person AND inside_zone.
+        # ── PERSON ALARM PATHS ─────────────────────────────────────────────
         if class_name == "person":
-            # --- High-confidence fast path -----------------------------------
             if confidence >= self.human_high_confidence:
                 is_critical = True
-                person_confirm_count = self.person_confirmation_frames  # effectively "instant"
-                logger.info(
-                    f"[YOLO] PERSON confidence={confidence:.2f} track={track_id} "
-                    f"→ HIGH-CONFIDENCE FAST PATH (>={self.human_high_confidence})"
-                )
-                if ts.state not in (
-                    DetectionState.ALARM_ACTIVE,
-                    DetectionState.EVENT_ACTIVE,
-                    DetectionState.EVIDENCE_CAPTURE,
-                ):
+
+            # If person is OUTSIDE restricted zone: NO ALARM EVER
+            if not feet_inside:
+                ts.person_confirm_count = 0
+                ts.first_confirm_at = None
+                if ts.state == DetectionState.ALARM_ACTIVE:
+                    logger.info(f"[ZONE] track={track_id} inside=false → ALARM CLEARED")
+                    logger.info(f"[ALARM] PERSON LEFT RESTRICTED ZONE")
+                    ts.state = DetectionState.NO_DETECTION
+                    should_stop_alarm = True
+                else:
+                    ts.state = DetectionState.POSSIBLE_DETECTION
+
+            else:
+                # ── HIGH-CONFIDENCE OVERRIDE (IMMEDIATE ALARM) ─────────────
+                # Person + feet INSIDE zone + conf >= 0.85 → IMMEDIATE ALARM.
+                # Bypasses: 4-frame wait, radar, ground.
+                # NEVER bypasses: person class check, feet-inside-zone check.
+                if is_critical and ts.state not in (DetectionState.ALARM_ACTIVE, DetectionState.EVENT_ACTIVE):
                     if ts.alarm_triggered_at is None or (now - ts.alarm_triggered_at) >= self.cooldown_seconds:
                         ts.state = DetectionState.ALARM_ACTIVE
                         ts.alarm_triggered_at = now
-                        ts.person_confirm_count = self.person_confirmation_frames
+                        ts.person_confirm_count = 1  # Counts as confirmed
                         should_alarm = True
                         should_create_event = True
                         should_capture = True
                         logger.info(
-                            f"[DECISION] CONFIRMED_HUMAN (fast path) "
+                            f"[DECISION] HIGH-CONFIDENCE IMMEDIATE ALARM "
                             f"track={track_id} zone={zone_id} conf={confidence:.2f}"
                         )
-                        logger.info(f"[BUZZER] ACTIVE — fast path conf={confidence:.2f}")
+                        logger.info(f"[ALARM] TRIGGERING ESP32 (HIGH-CONFIDENCE OVERRIDE)")
 
-            # --- Standard 4-frame temporal path ------------------------------
-            else:
-                # Check bbox stability before counting this frame
-                bbox_stable = self._is_bbox_stable(ts, bbox_norm)
+                elif ts.state == DetectionState.ALARM_ACTIVE:
+                    # Maintain alarm while person remains inside
+                    should_alarm = False
 
-                if not bbox_stable:
-                    # Reset confirmation counter
-                    ts.person_confirm_count = 0
-                    if ts.state not in (
-                        DetectionState.ALARM_ACTIVE,
-                        DetectionState.EVENT_ACTIVE,
-                        DetectionState.EVIDENCE_CAPTURE,
-                    ):
-                        ts.state = DetectionState.POSSIBLE_DETECTION
-                    logger.debug(
-                        f"[TEMPORAL] track={ts.track_id} bbox unstable → confirm reset"
-                    )
                 else:
-                    # Only increment if not already in alarm states
-                    if ts.state not in (
-                        DetectionState.ALARM_ACTIVE,
-                        DetectionState.EVENT_ACTIVE,
-                        DetectionState.EVIDENCE_CAPTURE,
-                    ):
-                        ts.person_confirm_count += 1
-                        count = ts.person_confirm_count
-                        logger.info(
-                            f"[TEMPORAL] track={track_id} confirmation={count}/{self.person_confirmation_frames} "
-                            f"zone={zone_id} conf={confidence:.2f}"
-                        )
+                    # ── NORMAL PATH: 4 consecutive frames ──────────────────
+                    bbox_stable = self._is_bbox_stable(ts, bbox_norm)
 
-                        if ts.state == DetectionState.NO_DETECTION:
+                    if not bbox_stable:
+                        ts.person_confirm_count = 0
+                        ts.first_confirm_at = None
+                        if ts.state not in (DetectionState.ALARM_ACTIVE, DetectionState.EVENT_ACTIVE):
                             ts.state = DetectionState.POSSIBLE_DETECTION
-                            ts.state_entered_at = now
+                        logger.debug(f"[TEMPORAL] track={ts.track_id} bbox unstable → confirm reset")
 
-                        if count >= self.person_confirmation_frames:
-                            # Check cooldown before firing alarm
-                            if ts.alarm_triggered_at is None or (now - ts.alarm_triggered_at) >= self.cooldown_seconds:
-                                ts.state = DetectionState.ALARM_ACTIVE
-                                ts.alarm_triggered_at = now
-                                should_alarm = True
-                                should_create_event = True
-                                should_capture = True
-                                logger.info(
-                                    f"[TEMPORAL] track={track_id} confirmation={count}/{self.person_confirmation_frames} "
-                                    f"→ CONFIRMED"
-                                )
-                                logger.info(
-                                    f"[DECISION] CONFIRMED_HUMAN "
-                                    f"track={track_id} zone={zone_id} conf={confidence:.2f} "
-                                    f"frames={count}"
-                                )
-                                logger.info(f"[BUZZER] ACTIVE — temporal confirmed")
-                        elif count == self.person_confirmation_frames - 1:
-                            ts.state = DetectionState.TEMPORAL_CONFIRMATION
-                        elif count > 0:
-                            ts.state = DetectionState.POSSIBLE_DETECTION
+                    else:
+                        if ts.state not in (DetectionState.ALARM_ACTIVE, DetectionState.EVENT_ACTIVE):
+                            if ts.person_confirm_count == 0:
+                                ts.first_confirm_at = now
+                            ts.person_confirm_count += 1
+                            count = ts.person_confirm_count
+                            confirm_duration = now - (ts.first_confirm_at or now)
 
-                person_confirm_count = ts.person_confirm_count
+                            logger.info(
+                                f"[CONFIRMATION] track={track_id} {count}/{self.person_confirmation_frames} "
+                                f"duration={confirm_duration:.2f}s zone={zone_id} conf={confidence:.2f}"
+                            )
+
+                            if ts.state == DetectionState.NO_DETECTION:
+                                ts.state = DetectionState.POSSIBLE_DETECTION
+                                ts.state_entered_at = now
+
+                            # Trigger buzzer when detected in restricted zone for N consecutive frames
+                            if count >= self.person_confirmation_frames:
+                                if ts.alarm_triggered_at is None or (now - ts.alarm_triggered_at) >= self.cooldown_seconds:
+                                    ts.state = DetectionState.ALARM_ACTIVE
+                                    ts.alarm_triggered_at = now
+                                    should_alarm = True
+                                    should_create_event = True
+                                    should_capture = True
+                                    logger.info(f"[DECISION] HUMAN CONFIRMED (4 consecutive frames) track={track_id} zone={zone_id}")
+                                    logger.info(f"[ALARM] TRIGGERING ESP32")
+                            elif count == self.person_confirmation_frames - 1:
+                                ts.state = DetectionState.TEMPORAL_CONFIRMATION
+                            elif count > 0:
+                                ts.state = DetectionState.POSSIBLE_DETECTION
+
+                        elif ts.state == DetectionState.ALARM_ACTIVE:
+                            # Alarm active — maintain state
+                            should_alarm = False
+
+            person_confirm_count = ts.person_confirm_count
+
 
         # ── NON-PERSON TEMPORAL PATH ──────────────────────────────────────
-        # Animals, vehicles, etc. go through multi-state confirmation.
-        # Persons are NOT classified as human by radar/ground alone.
         else:
             if ts.state == DetectionState.NO_DETECTION:
                 ts.state = DetectionState.POSSIBLE_DETECTION
@@ -370,7 +396,7 @@ class DecisionEngine:
                 should_capture = True
 
             elif ts.state in (DetectionState.EVIDENCE_CAPTURE, DetectionState.EVENT_ACTIVE):
-                pass  # Stay until event resolves
+                pass
 
         state_changed = ts.state != prev_state
 
@@ -385,6 +411,7 @@ class DecisionEngine:
             previous_state=prev_state,
             state_changed=state_changed,
             should_alarm=should_alarm,
+            should_stop_alarm=should_stop_alarm,
             should_create_event=should_create_event,
             should_capture=should_capture,
             is_critical=is_critical,

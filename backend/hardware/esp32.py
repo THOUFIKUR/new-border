@@ -111,7 +111,7 @@ class ESP32Client:
         self.status.online = False
         self.status.error = reason
 
-    def trigger_alarm(self, reason: str = "intrusion", duration_ms: int = 5000) -> bool:
+    def trigger_alarm(self, reason: str = "intrusion", duration_ms: int = 60000) -> bool:
         """
         Send alarm command to ESP32.
         Non-blocking. Returns False if ESP32 is offline.

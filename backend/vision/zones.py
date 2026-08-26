@@ -49,6 +49,25 @@ def _ray_cast_pip(px: float, py: float, polygon: List[ZonePoint]) -> bool:
     return inside
 
 
+def _bbox_intersects_polygon(bbox: dict, polygon: List[ZonePoint]) -> bool:
+    """
+    Returns True if the bounding box overlaps the polygon at all (partial entry counts).
+    Approximation: true if either
+      (a) any of the box's 4 corners is inside the polygon, or
+      (b) any polygon vertex falls inside the box rectangle.
+    Known limitation: does not catch the rare case of a thin polygon edge slicing
+    through the box without any corner/vertex inside it -- acceptable tradeoff.
+    """
+    x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
+    corners = [(x1, y1), (x2, y1), (x1, y2), (x2, y2)]
+    if any(_ray_cast_pip(cx, cy, polygon) for cx, cy in corners):
+        return True
+    for v in polygon:
+        if x1 <= v.x <= x2 and y1 <= v.y <= y2:
+            return True
+    return False
+
+
 def bottom_center(bbox: dict) -> tuple:
     """
     Returns the bottom-center point (normalized) of a bounding box.
@@ -67,6 +86,16 @@ def center_point(bbox: dict) -> tuple:
     x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
     cx = (x1 + x2) / 2.0
     cy = (y1 + y2) / 2.0
+    return cx, cy
+
+
+def top_center(bbox: dict) -> tuple:
+    """
+    Returns the top-center point (normalized) of a bounding box (head/upper body).
+    """
+    x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
+    cx = (x1 + x2) / 2.0
+    cy = y1
     return cx, cy
 
 
@@ -113,14 +142,21 @@ class ZoneEngine:
     def get_zones(self) -> List[Zone]:
         return list(self._zones.values())
 
-    def check_detection(self, class_name: str, bbox_norm: dict) -> List[str]:
+    def check_detection(self, class_name: str, bbox_norm: dict, track_id: Optional[int] = None) -> List[str]:
         """
-        Check if a detection's bottom-center or center point is inside any enabled zone.
+        Check if a detection is inside any enabled zone.
+
+        PERSON CLASS: Uses ONLY the bottom-center (feet) point.
+          - Never uses bbox overlap, center point, or head point for persons.
+          - If feet are outside the restricted polygon → NO ALARM, even if the
+            bounding box overlaps the zone or YOLO confidence is >= 0.85.
+
+        ALL OTHER CLASSES: OR logic — bottom-center OR center OR top-center.
+
         bbox_norm: {"x1", "y1", "x2", "y2"} in 0.0–1.0 normalized coordinates.
         Returns list of zone IDs where the detection is inside.
         """
         px_b, py_b = bottom_center(bbox_norm)
-        px_c, py_c = center_point(bbox_norm)
         triggered = []
         for zone in self._zones.values():
             if not zone.enabled:
@@ -129,21 +165,57 @@ class ZoneEngine:
                 continue
             if len(zone.polygon_points) < 3:
                 continue
-            if _ray_cast_pip(px_b, py_b, zone.polygon_points) or _ray_cast_pip(px_c, py_c, zone.polygon_points):
+
+            if class_name == "person":
+                in_zone = _bbox_intersects_polygon(bbox_norm, zone.polygon_points)
+            else:
+                # Non-persons: OR logic (bottom-center OR center OR top-center)
+                px_c, py_c = center_point(bbox_norm)
+                px_t, py_t = top_center(bbox_norm)
+                in_zone = (
+                    _ray_cast_pip(px_b, py_b, zone.polygon_points)
+                    or _ray_cast_pip(px_c, py_c, zone.polygon_points)
+                    or _ray_cast_pip(px_t, py_t, zone.polygon_points)
+                )
+
+            logger.debug(
+                f"[ZONE] track={track_id} class={class_name} "
+                f"feet=({px_b:.3f},{py_b:.3f}) inside={in_zone}"
+            )
+            if in_zone:
                 triggered.append(zone.id)
         return triggered
 
-    def check_any_zone(self, bbox_norm: dict) -> List[str]:
-        """Check against all enabled zones regardless of class filter."""
+    def check_any_zone(self, bbox_norm: dict, class_name: str = "unknown") -> List[str]:
+        """
+        Check against all enabled zones regardless of class filter.
+        PERSON: feet-only. All other classes: OR logic.
+        """
         px_b, py_b = bottom_center(bbox_norm)
-        px_c, py_c = center_point(bbox_norm)
         triggered = []
         for zone in self._zones.values():
             if not zone.enabled or len(zone.polygon_points) < 3:
                 continue
-            if _ray_cast_pip(px_b, py_b, zone.polygon_points) or _ray_cast_pip(px_c, py_c, zone.polygon_points):
+            if class_name == "person":
+                in_zone = _bbox_intersects_polygon(bbox_norm, zone.polygon_points)
+            else:
+                px_c, py_c = center_point(bbox_norm)
+                px_t, py_t = top_center(bbox_norm)
+                in_zone = (
+                    _ray_cast_pip(px_b, py_b, zone.polygon_points)
+                    or _ray_cast_pip(px_c, py_c, zone.polygon_points)
+                    or _ray_cast_pip(px_t, py_t, zone.polygon_points)
+                )
+            if in_zone:
                 triggered.append(zone.id)
         return triggered
+
+    def remove_zone(self, zone_id: str) -> bool:
+        """Remove a zone by ID. Returns True if found and removed, False if not found."""
+        if zone_id in self._zones:
+            del self._zones[zone_id]
+            return True
+        return False
 
     def to_frontend_list(self) -> List[dict]:
         return [

@@ -40,9 +40,14 @@ def annotate_frame(
     zones: List[Zone],
     decision_label: str = "",
     jpeg_quality: int = 75,
+    zone_status: Optional[dict] = None,
 ) -> bytes:
     """
     Annotate a frame with detections and zone overlays.
+    zone_status: optional dict keyed by track_id:
+      {track_id: {"inside": bool, "confirm": int, "required": int}}
+      When provided, the feet dot is colored (red=inside, green=outside)
+      and the label shows zone membership + confirmation count.
     Returns JPEG bytes.
     """
     h, w = frame.shape[:2]
@@ -77,13 +82,50 @@ def annotate_frame(
 
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
 
-        # Bottom-center contact point
+        # Bottom-center contact point (feet marker)
         bx = (x1 + x2) // 2
-        cv2.circle(annotated, (bx, y2), 5, (0, 255, 255), -1)
+        # Color by zone membership when status is available:
+        #   RED   = feet inside restricted zone (alarm risk)
+        #   GREEN = feet outside zone (safe)
+        #   YELLOW = no zone status (default / no zones configured)
+        if det.class_name == "person" and zone_status is not None and det.track_id is not None:
+            st = zone_status.get(det.track_id, {})
+            inside = st.get("inside", None)
+            if inside is True:
+                dot_color = (0, 0, 255)    # Red  — inside zone
+            elif inside is False:
+                dot_color = (0, 255, 0)    # Green — outside zone
+            else:
+                dot_color = (0, 255, 255)  # Yellow — unknown
+        else:
+            dot_color = (0, 255, 255)      # Yellow default
+        cv2.circle(annotated, (bx, y2), 5, dot_color, -1)
 
-        # Label
+        # Label — for persons include zone status, confirmation count, radar, ground, and decision status
         track_str = f"#{det.track_id}" if det.track_id is not None else ""
-        label = f"{det.class_name} {det.confidence:.2f} {track_str}"
+        if det.class_name == "person" and zone_status is not None and det.track_id is not None:
+            st = zone_status.get(det.track_id, {})
+            inside = st.get("inside", None)
+            confirm = st.get("confirm", 0)
+            required = st.get("required", 4)
+            radar_str = st.get("radar", "ON")
+            ground_str = st.get("ground", "ON")
+            status_str = st.get("status", "NO ALARM")
+            is_high = st.get("is_high_conf", False)
+
+            if inside is True:
+                if is_high:
+                    label = f"PERSON {det.confidence:.2f} {track_str} | ZONE: IN | STATUS: HIGH-CONFIDENCE ALARM"
+                elif status_str == "ALARM ACTIVE":
+                    label = f"PERSON {det.confidence:.2f} {track_str} | ZONE: IN | CONFIRM: {confirm}/{required} | RADAR: {radar_str} | GROUND: {ground_str} | STATUS: ALARM ACTIVE"
+                else:
+                    label = f"PERSON {det.confidence:.2f} {track_str} | ZONE: IN | CONFIRM: {confirm}/{required} | RADAR: {radar_str} | GROUND: {ground_str} | STATUS: {status_str}"
+            elif inside is False:
+                label = f"PERSON {det.confidence:.2f} {track_str} | ZONE: OUT | CONFIRM: 0/{required} | RADAR: {radar_str} | GROUND: {ground_str} | STATUS: NO ALARM"
+            else:
+                label = f"person {det.confidence:.2f} {track_str}"
+        else:
+            label = f"{det.class_name} {det.confidence:.2f} {track_str}"
         label_y = max(y1 - 8, 15)
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
         cv2.rectangle(annotated, (x1, label_y - th - 4), (x1 + tw + 4, label_y + 4), color, -1)
