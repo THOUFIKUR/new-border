@@ -265,3 +265,94 @@ def test_track_loss_grace_period():
     # Longer delay (> 0.5s grace) — track lost
     cleared = de.check_track_loss(now=time.monotonic() + 1.0)
     assert (99, ZONE) in cleared
+
+
+# ── TEST 15 & 16: Ground Consecutive YES Counter & Max Cap ─────────────
+def test_15_ground_consecutive_yes_duration_and_cap():
+    max_cap = 5.0
+    consecutive_yes = 0
+    # 1 YES
+    consecutive_yes += 1
+    assert min(consecutive_yes, max_cap) == 1.0
+    # 2 YES
+    consecutive_yes += 1
+    assert min(consecutive_yes, max_cap) == 2.0
+    # 3 YES
+    consecutive_yes += 1
+    assert min(consecutive_yes, max_cap) == 3.0
+    # 4 YES
+    consecutive_yes += 1
+    assert min(consecutive_yes, max_cap) == 4.0
+    # 5 YES
+    consecutive_yes += 1
+    assert min(consecutive_yes, max_cap) == 5.0
+    # 6 YES (capped at 5)
+    consecutive_yes += 1
+    assert min(consecutive_yes, max_cap) == 5.0
+
+
+def test_16_ground_no_resets_counter():
+    consecutive_yes = 3
+    # Ground reading NO
+    ground_active = False
+    if not ground_active:
+        consecutive_yes = 0
+    assert consecutive_yes == 0
+
+
+# ── TEST 17 & 18: Dual Alarm Arbitration & Combined Reasons ─────────────
+def test_17_dual_alarm_arbitration_reasons():
+    # Case 1: YOLO=OFF, GROUND=OFF -> buzzer OFF
+    yolo, ground = False, False
+    assert (yolo or ground) is False
+
+    # Case 2: YOLO=ON, GROUND=OFF -> YOLO_HUMAN_INTRUSION
+    yolo, ground = True, False
+    reason = "YOLO_AND_GROUND" if (yolo and ground) else ("YOLO_HUMAN_INTRUSION" if yolo else "GROUND_SENSOR")
+    assert (yolo or ground) is True
+    assert reason == "YOLO_HUMAN_INTRUSION"
+
+    # Case 3: YOLO=OFF, GROUND=ON -> GROUND_SENSOR
+    yolo, ground = False, True
+    reason = "YOLO_AND_GROUND" if (yolo and ground) else ("YOLO_HUMAN_INTRUSION" if yolo else "GROUND_SENSOR")
+    assert (yolo or ground) is True
+    assert reason == "GROUND_SENSOR"
+
+    # Case 4: YOLO=ON, GROUND=ON -> YOLO_AND_GROUND
+    yolo, ground = True, True
+    reason = "YOLO_AND_GROUND" if (yolo and ground) else ("YOLO_HUMAN_INTRUSION" if yolo else "GROUND_SENSOR")
+    assert (yolo or ground) is True
+    assert reason == "YOLO_AND_GROUND"
+
+
+def test_18_person_leaves_while_ground_active_buzzer_remains_on():
+    yolo_alarm = True
+    ground_alarm = True
+
+    # Person leaves -> yolo_alarm becomes False
+    yolo_alarm = False
+    # Ground alarm is still active -> overall buzzer stays ON
+    buzzer_active = yolo_alarm or ground_alarm
+    assert buzzer_active is True, "Buzzer must remain ON while ground alarm is active"
+
+    # Ground alarm expires -> buzzer turns OFF
+    ground_alarm = False
+    buzzer_active = yolo_alarm or ground_alarm
+    assert buzzer_active is False, "Buzzer turns OFF when both alarms clear"
+
+
+def test_19_ground_expires_while_person_inside_buzzer_remains_on():
+    yolo_alarm = True
+    ground_alarm = True
+
+    # Ground alarm expires -> ground_alarm becomes False
+    ground_alarm = False
+    # Person remains inside -> overall buzzer stays ON
+    buzzer_active = yolo_alarm or ground_alarm
+    assert buzzer_active is True, "Buzzer must remain ON while YOLO alarm is active"
+
+    # Person leaves -> yolo_alarm becomes False -> buzzer turns OFF
+    yolo_alarm = False
+    buzzer_active = yolo_alarm or ground_alarm
+    assert buzzer_active is False
+

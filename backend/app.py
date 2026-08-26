@@ -94,7 +94,12 @@ _active_ws_clients: List[WebSocket] = []
 _health_status: dict = {}
 _last_buzzer_pulse: float = 0.0
 _buzzer_active_state: bool = False
+_yolo_alarm_active: bool = False
 _ground_alarm_active_state: bool = False
+_ground_consecutive_yes: int = 0
+_ground_alarm_expires_at: float = 0.0
+_esp32_buzzer_on: bool = False
+_current_alarm_reason: str = ""
 _last_ground_logged_state: Optional[bool] = None
 _last_ground_trigger_time: float = 0.0
 # Per-frame zone membership status for annotator debug overlay.
@@ -239,7 +244,9 @@ async def _processing_loop():
     6. Broadcasts to WebSocket clients
     """
     import queue as _q
-    global _latest_stream_data, _buzzer_active_state, _ground_alarm_active_state, _last_ground_logged_state, _last_ground_trigger_time
+    global _latest_stream_data, _buzzer_active_state, _yolo_alarm_active, _ground_alarm_active_state
+    global _ground_consecutive_yes, _ground_alarm_expires_at, _esp32_buzzer_on, _current_alarm_reason
+    global _last_ground_logged_state, _last_ground_trigger_time
 
     frame_interval = 1.0 / cfg.STREAM_FPS
     last_frame_time = 0.0
@@ -285,32 +292,30 @@ async def _processing_loop():
                 logger.info(f"[GROUND] GPIO26 RAW={raw_val} | TRIGGERED={'YES' if ground_active else 'NO'}")
                 _last_ground_logged_state = ground_active
 
-            # ── INDEPENDENT GROUND-SENSOR ALARM PATH (runs every tick, no YOLO dependency) ──
-            if ground_active and not _ground_alarm_active_state:
-                logger.info("[GROUND] TRIGGERED — immediate alarm, no YOLO wait, reason=GROUND_DISTURBANCE")
-                _ground_alarm_active_state = True
-                loop = asyncio.get_running_loop()
-                future = loop.run_in_executor(None, esp32_client.trigger_alarm, "GROUND_DISTURBANCE")
-                future.add_done_callback(lambda fut: logger.info(
-                    f"[GROUND_ALARM] {'ACKNOWLEDGED' if fut.result() else 'FAILED'}"
-                ))
-                event_manager.create_event(
-                    track_id=None,
-                    zone_id="ground-sensor",
-                    class_name="ground_disturbance",
-                    confidence=1.0,
-                    fused_score=1.0,
-                    is_critical=False,
-                    reason="GROUND_DISTURBANCE",
-                    sensor_evidence={"ground_active": True, "trigger_source": "GROUND_SENSOR_ONLY_NO_VISUAL"},
-                )
-
-            elif not ground_active and _ground_alarm_active_state:
-                _ground_alarm_active_state = False
-                if not _buzzer_active_state and esp32_client.status.online:
-                    loop = asyncio.get_running_loop()
-                    loop.run_in_executor(None, esp32_client.stop_alarm)
-                logger.info("[GROUND] CLEARED — alarm stopped")
+            # ── PATH B — GROUND SENSOR CONSECUTIVE YES LOGIC ──
+            if ground_active:
+                _ground_consecutive_yes += 1
+                logger.info(f"[GROUND] consecutive_yes={_ground_consecutive_yes}")
+                duration_sec = min(_ground_consecutive_yes, cfg.GROUND_MAX_ALARM_SECONDS)
+                _ground_alarm_expires_at = time.time() + duration_sec
+                if not _ground_alarm_active_state:
+                    _ground_alarm_active_state = True
+                    logger.info(f"[ALARM] GROUND SENSOR duration={int(duration_sec)}s")
+                    event_manager.create_event(
+                        track_id=None,
+                        zone_id="ground-sensor",
+                        class_name="ground_disturbance",
+                        confidence=1.0,
+                        fused_score=1.0,
+                        is_critical=False,
+                        reason="GROUND_SENSOR",
+                        sensor_evidence={"ground_active": True, "trigger_source": "GROUND_SENSOR"},
+                    )
+            else:
+                _ground_consecutive_yes = 0
+                if _ground_alarm_active_state and time.time() >= _ground_alarm_expires_at:
+                    _ground_alarm_active_state = False
+                    logger.info("[BUZZER] OFF reason=GROUND_TIMEOUT")
 
             # Get latest detection result (non-blocking)
             det_frame = None
@@ -414,39 +419,11 @@ async def _processing_loop():
                             else "HUMAN_INTRUSION_SENSOR_CONFIRMED"
                         )
 
-                        # ── ESP32 Buzzer (ONE-SHOT trigger on transition to ALARM_ACTIVE) ──
-                        if decision_out.should_alarm and det.class_name == "person" and not _buzzer_active_state:
+                        # ── Person ALARM_ACTIVE event trigger ──
+                        if decision_out.should_alarm and det.class_name == "person":
                             logger.info(
-                                f"[ESP32_REQUEST] POST /alarm active=true reason={event_reason} "
-                                f"esp32_online={esp32_client.status.online} "
-                                f"track={det.track_id} conf={det.confidence:.2f}"
+                                f"[DECISION] ALARM_ACTIVE track={det.track_id} conf={det.confidence:.2f}"
                             )
-                            # NOTE: _buzzer_active_state is NOT set here.
-                            # It is set ONLY inside the callback after a confirmed HTTP 200.
-                            # If the ESP32 is offline or returns an error, the UI must NOT
-                            # report BUZZER ACTIVE. (Audit P1 fix)
-                            loop = asyncio.get_running_loop()
-                            future = loop.run_in_executor(
-                                None, esp32_client.trigger_alarm, event_reason
-                            )
-                            def _log_esp32_result(fut, reason=event_reason):
-                                global _buzzer_active_state
-                                try:
-                                    ok = fut.result()
-                                    if ok:
-                                        _buzzer_active_state = True  # Set ONLY after confirmed HTTP 200
-                                        logger.info(f"[ESP32_RESPONSE] 200 OK — reason={reason}")
-                                        logger.info(f"[BUZZER] ACKNOWLEDGED — ALARM ACTIVE")
-                                    else:
-                                        logger.warning(f"[ESP32_RESPONSE] FAILED — ESP32 offline or error")
-                                        logger.warning(f"[BUZZER] NOT ACTIVATED — hardware unavailable")
-                                        # _buzzer_active_state remains False → frontend shows SILENT
-                                except Exception as exc:
-                                    logger.error(f"[ESP32_RESPONSE] exception: {exc}")
-                                    logger.warning(f"[BUZZER] NOT ACTIVATED — request exception")
-                                    # _buzzer_active_state remains False
-                            future.add_done_callback(_log_esp32_result)
-
 
                         # ── Event creation (DB audit, cooldown-gated, ONE per alarm) ──
                         event = None
@@ -478,23 +455,59 @@ async def _processing_loop():
 
                 current_decision_label = new_label
 
-            # ── Track Loss Check & One-Shot Buzzer Stop ───────────────────────────
+            # ── Track Loss Check & Combined Alarm Arbitration ───────────────────
             decision_engine.check_track_loss()
 
-            # Check if any track remains in an active alarm state
-            any_alarm_active = any(
+            # Check if any track remains in an active YOLO alarm state
+            _yolo_alarm_active = any(
                 s["state"] in ("ALARM_ACTIVE", "EVIDENCE_CAPTURE", "EVENT_ACTIVE")
                 for s in decision_engine.get_all_states()
             )
 
-            # When all alarm tracks clear: send stop_alarm ONCE (if ground alarm also inactive)
-            if not any_alarm_active and _buzzer_active_state:
+            # Combined Buzzer State & Reason Arbitration
+            buzzer_should_be_on = _yolo_alarm_active or _ground_alarm_active_state
+            if _yolo_alarm_active and _ground_alarm_active_state:
+                combined_reason = "YOLO_AND_GROUND"
+            elif _yolo_alarm_active:
+                combined_reason = "YOLO_HUMAN_INTRUSION"
+            elif _ground_alarm_active_state:
+                combined_reason = "GROUND_SENSOR"
+            else:
+                combined_reason = ""
+
+            # One-Shot ESP32 Buzzer Control
+            if buzzer_should_be_on and not _esp32_buzzer_on:
+                _esp32_buzzer_on = True
+                _buzzer_active_state = True
+                _current_alarm_reason = combined_reason
+                if combined_reason == "YOLO_HUMAN_INTRUSION":
+                    logger.info("[ALARM] YOLO HUMAN INTRUSION")
+                    logger.info(f"[BUZZER] ON reason={combined_reason}")
+                elif combined_reason == "GROUND_SENSOR":
+                    dur_val = int(min(_ground_consecutive_yes, cfg.GROUND_MAX_ALARM_SECONDS))
+                    logger.info(f"[BUZZER] ON reason={combined_reason} duration={dur_val}s")
+                else:
+                    logger.info(f"[BUZZER] ON reason={combined_reason}")
+
+                if esp32_client.status.online:
+                    logger.info(f"[ESP32_REQUEST] POST /alarm active=true reason={combined_reason}")
+                    loop = asyncio.get_running_loop()
+                    loop.run_in_executor(None, esp32_client.trigger_alarm, combined_reason)
+
+            elif not buzzer_should_be_on and _esp32_buzzer_on:
+                _esp32_buzzer_on = False
                 _buzzer_active_state = False
-                if not _ground_alarm_active_state and esp32_client.status.online:
+                clear_reason = "YOLO_CLEARED" if not _yolo_alarm_active else "GROUND_TIMEOUT"
+                logger.info(f"[BUZZER] OFF reason={clear_reason}")
+                _current_alarm_reason = ""
+                if esp32_client.status.online:
                     logger.info("[ESP32_REQUEST] POST /alarm/stop")
                     loop = asyncio.get_running_loop()
                     loop.run_in_executor(None, esp32_client.stop_alarm)
-                logger.info("[BUZZER] OFF — all alarm tracks cleared")
+
+            elif buzzer_should_be_on and _esp32_buzzer_on and combined_reason != _current_alarm_reason:
+                _current_alarm_reason = combined_reason
+                logger.info(f"[BUZZER] ON reason={combined_reason}")
 
             if raw_frame is not None:
                 try:

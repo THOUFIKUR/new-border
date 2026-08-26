@@ -49,23 +49,34 @@ def _ray_cast_pip(px: float, py: float, polygon: List[ZonePoint]) -> bool:
     return inside
 
 
-def _bbox_intersects_polygon(bbox: dict, polygon: List[ZonePoint]) -> bool:
+def representative_points(bbox: dict) -> List[tuple]:
     """
-    Returns True if the bounding box overlaps the polygon at all (partial entry counts).
-    Approximation: true if either
-      (a) any of the box's 4 corners is inside the polygon, or
-      (b) any polygon vertex falls inside the box rectangle.
-    Known limitation: does not catch the rare case of a thin polygon edge slicing
-    through the box without any corner/vertex inside it -- acceptable tradeoff.
+    Returns the 9 representative points (normalized 0.0-1.0) of a bounding box:
+    1. top-left
+    2. top-center
+    3. top-right
+    4. center-left
+    5. center
+    6. center-right
+    7. bottom-left
+    8. bottom-center
+    9. bottom-right
     """
     x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
-    corners = [(x1, y1), (x2, y1), (x1, y2), (x2, y2)]
-    if any(_ray_cast_pip(cx, cy, polygon) for cx, cy in corners):
-        return True
-    for v in polygon:
-        if x1 <= v.x <= x2 and y1 <= v.y <= y2:
-            return True
-    return False
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    return [
+        (x1, y1),  # 1. top-left
+        (cx, y1),  # 2. top-center
+        (x2, y1),  # 3. top-right
+        (x1, cy),  # 4. center-left
+        (cx, cy),  # 5. center
+        (x2, cy),  # 6. center-right
+        (x1, y2),  # 7. bottom-left
+        (cx, y2),  # 8. bottom-center
+        (x2, y2),  # 9. bottom-right
+    ]
+
 
 
 def bottom_center(bbox: dict) -> tuple:
@@ -146,11 +157,7 @@ class ZoneEngine:
         """
         Check if a detection is inside any enabled zone.
 
-        PERSON CLASS: Uses ONLY the bottom-center (feet) point.
-          - Never uses bbox overlap, center point, or head point for persons.
-          - If feet are outside the restricted polygon → NO ALARM, even if the
-            bounding box overlaps the zone or YOLO confidence is >= 0.85.
-
+        PERSON CLASS: Inside if ANY of the 9 representative points is inside the polygon.
         ALL OTHER CLASSES: OR logic — bottom-center OR center OR top-center.
 
         bbox_norm: {"x1", "y1", "x2", "y2"} in 0.0–1.0 normalized coordinates.
@@ -167,7 +174,8 @@ class ZoneEngine:
                 continue
 
             if class_name == "person":
-                in_zone = _bbox_intersects_polygon(bbox_norm, zone.polygon_points)
+                pts = representative_points(bbox_norm)
+                in_zone = any(_ray_cast_pip(px, py, zone.polygon_points) for px, py in pts)
             else:
                 # Non-persons: OR logic (bottom-center OR center OR top-center)
                 px_c, py_c = center_point(bbox_norm)
@@ -179,8 +187,7 @@ class ZoneEngine:
                 )
 
             logger.debug(
-                f"[ZONE] track={track_id} class={class_name} "
-                f"feet=({px_b:.3f},{py_b:.3f}) inside={in_zone}"
+                f"[ZONE] track={track_id} representative_points=9 inside={in_zone}"
             )
             if in_zone:
                 triggered.append(zone.id)
@@ -189,7 +196,7 @@ class ZoneEngine:
     def check_any_zone(self, bbox_norm: dict, class_name: str = "unknown") -> List[str]:
         """
         Check against all enabled zones regardless of class filter.
-        PERSON: feet-only. All other classes: OR logic.
+        PERSON: 9 representative points. All other classes: OR logic.
         """
         px_b, py_b = bottom_center(bbox_norm)
         triggered = []
@@ -197,7 +204,8 @@ class ZoneEngine:
             if not zone.enabled or len(zone.polygon_points) < 3:
                 continue
             if class_name == "person":
-                in_zone = _bbox_intersects_polygon(bbox_norm, zone.polygon_points)
+                pts = representative_points(bbox_norm)
+                in_zone = any(_ray_cast_pip(px, py, zone.polygon_points) for px, py in pts)
             else:
                 px_c, py_c = center_point(bbox_norm)
                 px_t, py_t = top_center(bbox_norm)

@@ -88,6 +88,9 @@ PERSON_MIN_CONFIRM_SECONDS: float = _float("PERSON_MIN_CONFIRM_SECONDS", 0.5)
 # Short track-loss grace period before releasing active alarm (seconds)
 TRACK_LOSS_GRACE_SECONDS: float = _float("TRACK_LOSS_GRACE_SECONDS", 2.0)
 
+# Maximum duration in seconds for ground sensor alarm (consecutive YES counter cap)
+GROUND_MAX_ALARM_SECONDS: float = _float("GROUND_MAX_ALARM_SECONDS", 5.0)
+
 # Prototype simulation override for unconnected Radar hardware
 RADAR_SIMULATED_PROTOTYPE_STATE: bool = _bool("RADAR_SIMULATED_PROTOTYPE_STATE", True)
 
