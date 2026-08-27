@@ -51,3 +51,31 @@ async def list_cameras():
         except Exception:
             pass
     return {"cameras": [cam_info]}
+
+
+from pydantic import BaseModel
+import base64
+
+class FrameUploadRequest(BaseModel):
+    image: str
+    camera_id: str = "cam_01"
+
+
+@router.post("/camera/frame")
+async def upload_camera_frame(payload: FrameUploadRequest):
+    """Receive JPEG base64 frame from browser webcam and process via YOLO engine."""
+    from backend.app import camera_1, camera_2
+    target_cam = camera_2 if payload.camera_id in ("cam_02", "cam-02") else camera_1
+    img_str = payload.image
+    if "," in img_str:
+        img_str = img_str.split(",", 1)[1]
+    try:
+        jpeg_bytes = base64.b64decode(img_str)
+        success = target_cam.update_frame(jpeg_bytes)
+        if success:
+            return {"status": "ok", "fps": round(target_cam.status.fps, 1)}
+        else:
+            return {"status": "error", "message": "Failed to decode frame"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+

@@ -132,6 +132,46 @@ class CameraCapture:
         with self._frame_lock:
             return self._latest_raw
 
+    def update_frame(self, jpeg_bytes: bytes, raw_frame=None) -> bool:
+        """Allows browser/cloud clients to upload camera frames directly."""
+        if raw_frame is None and jpeg_bytes:
+            try:
+                import numpy as np
+                nparr = np.frombuffer(jpeg_bytes, np.uint8)
+                raw_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            except Exception as e:
+                logger.error(f"[CAMERA] Failed to decode injected frame: {e}")
+                return False
+
+        if raw_frame is None:
+            return False
+
+        h, w = raw_frame.shape[:2]
+        now = time.monotonic()
+
+        if jpeg_bytes is None:
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
+            success, buf = cv2.imencode(".jpg", raw_frame, encode_params)
+            if success:
+                jpeg_bytes = buf.tobytes()
+
+        with self._frame_lock:
+            self._latest_frame = jpeg_bytes
+            self._latest_raw = raw_frame
+
+        self.status.online = True
+        self.status.resolution = f"{w}x{h}"
+        self.status.error = None
+        self.status.last_frame_time = now
+        self.status.frame_count += 1
+
+        self._fps_window.append(now)
+        if len(self._fps_window) >= 2:
+            elapsed = self._fps_window[-1] - self._fps_window[0]
+            if elapsed > 0:
+                self.status.fps = (len(self._fps_window) - 1) / elapsed
+        return True
+
     # ── Internal ─────────────────────────────────────────────────────────
 
     def _capture_loop(self):

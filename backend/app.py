@@ -161,8 +161,7 @@ async def lifespan(app: FastAPI):
     health["yolo"] = yolo_ok
     if yolo_ok:
         logger.info("YOLO [OK]")
-        if cam_ok:
-            detector.start(camera)
+        detector.start(camera)
     else:
         logger.error(f"YOLO [FAIL] — {detector.error}")
 
@@ -566,7 +565,6 @@ async def _processing_loop():
                 logger.info(f"[BUZZER] ON reason={combined_reason}")
 
             frame_b64 = ""
-
             if raw_frame is not None:
                 try:
                     annotated_jpeg = annotate_frame(
@@ -689,7 +687,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
+    allow_origins=cfg.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -721,8 +719,19 @@ async def websocket_stream(ws: WebSocket):
     logger.info(f"WebSocket client connected. Total: {len(_active_ws_clients)}")
     try:
         while True:
-            # Keep alive — client can send pings
-            await ws.receive_text()
+            text = await ws.receive_text()
+            if text and text != "ping":
+                try:
+                    data = json.loads(text)
+                    if data.get("type") == "frame" and "image" in data:
+                        img_str = data["image"]
+                        if "," in img_str:
+                            img_str = img_str.split(",", 1)[1]
+                        jpeg_bytes = base64.b64decode(img_str)
+                        target_cam = camera_2 if data.get("camera_id") in ("cam_02", "cam-02") else camera_1
+                        target_cam.update_frame(jpeg_bytes)
+                except Exception:
+                    pass
     except WebSocketDisconnect:
         pass
     finally:

@@ -53,7 +53,7 @@ class DetectionFrame:
 
 class YOLODetector:
     """
-    Runs YOLO11n tracking in a dedicated thread.
+    Runs YOLO26n tracking in a dedicated thread.
     Input: raw frames from CameraCapture.
     Output: DetectionFrame pushed to DETECTION_QUEUE.
     """
@@ -95,7 +95,7 @@ class YOLODetector:
                 logger.info(f"Model not found locally at {model_file}. Downloading from Ultralytics...")
                 model_file.parent.mkdir(parents=True, exist_ok=True)
             self._model = YOLO(str(model_file) if model_file.exists() else model_file.name)
-            # If downloaded, copy to models/yolo/
+            # If downloaded to current working directory, move to models/yolo/
             if not model_file.exists():
                 import shutil
                 downloaded = Path(model_file.name)
@@ -103,20 +103,9 @@ class YOLODetector:
                     shutil.move(str(downloaded), str(model_file))
             self.ready = True
             self.error = None
-            logger.info("[YOLO] model=YOLO26n loaded successfully")
+            logger.info(f"[YOLO] model=YOLO26n ({model_file.name}) loaded successfully")
             return True
         except Exception as e:
-            # Fallback to local yolo11n.pt if yolo26n.pt weights not found on server
-            try:
-                fallback_path = Path("models/yolo/yolo11n.pt")
-                if fallback_path.exists():
-                    self._model = YOLO(str(fallback_path))
-                    self.ready = True
-                    self.error = None
-                    logger.info("[YOLO] model=YOLO26n (loaded via yolo11n weights)")
-                    return True
-            except Exception:
-                pass
             self.ready = False
             self.error = str(e)
             logger.error(f"[YOLO] Failed to load model: {e}")

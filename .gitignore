@@ -44,6 +44,8 @@ htmlcov/
 .coverage
 
 # YOLO models (large binary files)
+*.pt
+*.onnx
 models/yolo/*.pt
 models/yolo/*.onnx
 

@@ -121,9 +121,17 @@ FUSION_CONFIRMED_THRESHOLD: float = _float("FUSION_CONFIRMED_THRESHOLD", 0.65)
 # ─── Streaming ─────────────────────────────────────────────────────────────
 STREAM_FPS: int = _int("STREAM_FPS", 15)
 STREAM_JPEG_QUALITY: int = _int("STREAM_JPEG_QUALITY", 75)
-BACKEND_PORT: int = _int("BACKEND_PORT", 8000)
+BACKEND_PORT: int = _int("BACKEND_PORT", _int("PORT", 8000))
 BACKEND_HOST: str = os.getenv("BACKEND_HOST", "0.0.0.0")
 
 # ─── Storage buckets ───────────────────────────────────────────────────────
 BUCKET_IMAGES: str = "event-images"
 BUCKET_VIDEOS: str = "event-videos"
+
+# ─── CORS ──────────────────────────────────────────────────────────────────
+ALLOWED_ORIGINS: list = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+

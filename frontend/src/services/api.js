@@ -1,6 +1,9 @@
 // BorderPulse — API + WebSocket service layer
-const BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
-const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+const envBackend = import.meta.env.VITE_BACKEND_URL;
+export const BASE = envBackend ? envBackend.replace(/\/$/, '') : 'http://localhost:8000';
+
+const defaultWs = BASE.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+export const WS_BASE = import.meta.env.VITE_WS_URL ? import.meta.env.VITE_WS_URL.replace(/\/$/, '') : defaultWs;
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
@@ -37,6 +40,11 @@ export const setSimulation   = (radar, ground) =>
 // Devices
 export const getDevices = () => apiFetch('/api/devices');
 export const getCameras = () => apiFetch('/api/cameras');
+export const sendCameraFrame = (base64Image, cameraId = 'cam_01') =>
+  apiFetch('/api/camera/frame', {
+    method: 'POST',
+    body: JSON.stringify({ image: base64Image, camera_id: cameraId }),
+  });
 
 // ESP32
 export const getEsp32Status = () => apiFetch('/api/esp32/status');
