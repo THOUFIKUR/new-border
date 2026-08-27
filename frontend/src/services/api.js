@@ -1,9 +1,75 @@
-// BorderPulse — API + WebSocket service layer
-const envBackend = import.meta.env.VITE_BACKEND_URL;
-export const BASE = envBackend ? envBackend.replace(/\/$/, '') : 'http://localhost:8000';
+// BorderPulse — Centralized API + WebSocket service layer
+// Resolves production vs local environment backend & WebSocket URLs dynamically.
 
-const defaultWs = BASE.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
-export const WS_BASE = import.meta.env.VITE_WS_URL ? import.meta.env.VITE_WS_URL.replace(/\/$/, '') : defaultWs;
+const rawEnvBackend = import.meta.env.VITE_BACKEND_URL;
+const rawEnvWs = import.meta.env.VITE_WS_URL;
+
+// Helper to sanitize URLs (remove trailing slashes and spaces)
+const sanitizeUrl = (url) => (url ? url.trim().replace(/\/$/, '') : '');
+
+// Detect browser execution context
+const isBrowser = typeof window !== 'undefined';
+const isLocalhost =
+  isBrowser &&
+  (window.location.hostname === 'localhost' ||
+   window.location.hostname === '127.0.0.1' ||
+   window.location.hostname === '::1');
+
+function resolveBaseUrl() {
+  const envUrl = sanitizeUrl(rawEnvBackend);
+  if (envUrl) {
+    return envUrl;
+  }
+
+  // Local development fallback
+  if (isLocalhost || !isBrowser) {
+    return 'http://localhost:8000';
+  }
+
+  // Production Vercel / Cloud deployment fallback
+  // NEVER use localhost:8000 on production domain when VITE_BACKEND_URL was not set at build time!
+  console.warn(
+    '[BorderPulse API] WARNING: VITE_BACKEND_URL environment variable is not defined in Vercel settings! ' +
+    'Please add VITE_BACKEND_URL=https://<your-render-backend>.onrender.com in Vercel settings and trigger a redeploy.'
+  );
+  
+  // Use relative root fallback so the browser does NOT attempt ERR_CONNECTION_REFUSED to localhost:8000
+  return window.location.origin;
+}
+
+export const BASE = resolveBaseUrl();
+
+function resolveWsUrl() {
+  const envWs = sanitizeUrl(rawEnvWs);
+  if (envWs) {
+    return envWs;
+  }
+
+  // Derive WebSocket URL from BASE
+  if (BASE) {
+    if (BASE.startsWith('https://')) {
+      return BASE.replace(/^https:\/\//, 'wss://');
+    } else if (BASE.startsWith('http://')) {
+      return BASE.replace(/^http:\/\//, 'ws://');
+    } else if (BASE.startsWith('//')) {
+      return `wss:${BASE}`;
+    }
+  }
+
+  // Production fallback if BASE is relative/window.location.origin
+  if (isBrowser && !isLocalhost) {
+    const isHttps = window.location.protocol === 'https:';
+    const wsProto = isHttps ? 'wss:' : 'ws:';
+    return `${wsProto}//${window.location.host}`;
+  }
+
+  return 'ws://localhost:8000';
+}
+
+export const WS_BASE = resolveWsUrl();
+
+console.log('[BorderPulse] API BASE URL:', BASE);
+console.log('[BorderPulse] WebSocket BASE URL:', WS_BASE);
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
@@ -70,12 +136,12 @@ export const testBuzzerApi = () => apiFetch('/api/test/buzzer', { method: 'POST'
 // WebSocket stream
 export function createStreamSocket(onMessage, onClose) {
   const ws = new WebSocket(`${WS_BASE}/ws/stream`);
-  ws.onopen  = () => { console.log('[WS] Connected'); ws.send('ping'); };
+  ws.onopen  = () => { console.log('[WS] Connected to', WS_BASE); ws.send('ping'); };
   ws.onmessage = (e) => {
     try { onMessage(JSON.parse(e.data)); } catch {}
   };
-  ws.onclose = () => { console.log('[WS] Disconnected'); onClose?.(); };
-  ws.onerror = (e) => console.error('[WS] Error', e);
+  ws.onclose = () => { console.log('[WS] Disconnected from', WS_BASE); onClose?.(); };
+  ws.onerror = (e) => console.error('[WS] Error on', WS_BASE, e);
   // Keepalive ping
   const ping = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) ws.send('ping');
