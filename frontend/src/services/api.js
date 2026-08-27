@@ -22,8 +22,13 @@ function resolveBaseUrl() {
     if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
       return 'http://localhost:8000';
     }
+    
     // Production browser environment (e.g. Vercel deployment domain)
     // NEVER fall back to localhost:8000 on production cloud domains!
+    console.error(
+      '[BorderPulse API] CRITICAL CONFIGURATION ERROR: VITE_BACKEND_URL is not configured in Vercel environment variables! ' +
+      'Defaulting to production backend: ' + DEFAULT_PROD_BACKEND
+    );
     return DEFAULT_PROD_BACKEND;
   }
 
