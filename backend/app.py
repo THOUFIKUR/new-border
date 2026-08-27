@@ -565,6 +565,8 @@ async def _processing_loop():
                 _current_alarm_reason = combined_reason
                 logger.info(f"[BUZZER] ON reason={combined_reason}")
 
+            frame_b64 = ""
+
             if raw_frame is not None:
                 try:
                     annotated_jpeg = annotate_frame(
