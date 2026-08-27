@@ -1,4 +1,5 @@
 # BorderPulse .gitignore
+<<<<<<< HEAD
 # Secrets
 .env
 frontend/.env
@@ -13,6 +14,9 @@ __pycache__/
 
 # YOLO model weights
 *.pt
+=======
+
+>>>>>>> origin/main
 # Environment — NEVER commit secrets
 .env
 .env.local
